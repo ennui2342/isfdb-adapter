@@ -1,0 +1,53 @@
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set a root password}
+      MARIADB_DATABASE: isfdb
+    volumes:
+      - isfdb-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  adapter:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: root
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set a root password}
+      DB_NAME: isfdb
+    ports:
+      - "8080:8080"
+
+  # Runs once at `docker compose run --rm refresh` (or on a host cron calling
+  # that), not on a schedule by itself — compose has no native cron. Populates
+  # an empty `db` volume on first run; safe to re-run any time afterward, it
+  # only swaps the tables in once the new import is verified.
+  refresh:
+    build: .
+    command: ["python", "refresh.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: root
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set a root password}
+      DB_NAME: isfdb
+      ISFDB_WIKI_USERNAME: ${ISFDB_WIKI_USERNAME:?set your isfdb.org wiki username}
+      ISFDB_WIKI_PASSWORD: ${ISFDB_WIKI_PASSWORD:?set your isfdb.org wiki password}
+    profiles:
+      - refresh
+
+volumes:
+  isfdb-db-data:
