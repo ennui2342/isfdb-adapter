@@ -292,6 +292,28 @@ def atomic_swap(staging_db: str, live_db: str):
     conn.close()
 
 
+def warm_caches(database: str):
+    """Preload MyISAM indexes (including the FULLTEXT ones) into the key
+    buffer right after a swap, so the first real searches don't pay for a
+    cold key buffer against a table that's had zero queries against it.
+    `LOAD INDEX INTO CACHE` reads every index block for the named tables —
+    unlike firing sample search queries, it doesn't depend on guessing which
+    terms real users will search next; it guarantees full coverage. Requires
+    key_buffer_size to actually be large enough to hold it all (see
+    mariadb-statefulset.yaml in the k8s repo) or this just thrashes instead
+    of helping."""
+    log.info("warming key buffer for %s...", database)
+    start = time.time()
+    conn = db_conn(database)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"LOAD INDEX INTO CACHE `{database}`.titles, `{database}`.authors, "
+            f"`{database}`.canonical_author, `{database}`.pubs, `{database}`.pub_content"
+        )
+    conn.close()
+    log.info("key buffer warm in %.0fs", time.time() - start)
+
+
 def main():
     log.info("checking ISFDB downloads page for a new backup...")
     scraper, html = login_and_get_downloads_page()
@@ -316,6 +338,7 @@ def main():
         build_search_indexes("isfdb_staging")
         sanity_check("isfdb_staging")
         atomic_swap("isfdb_staging", "isfdb")
+        warm_caches("isfdb")
 
     log.info("refresh complete — mirror now at %s", backup_date)
 
