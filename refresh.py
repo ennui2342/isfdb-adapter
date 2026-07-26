@@ -292,26 +292,40 @@ def atomic_swap(staging_db: str, live_db: str):
     conn.close()
 
 
+WARM_TABLES = ("titles", "authors", "canonical_author", "pubs", "pub_content")
+
+
 def warm_caches(database: str):
-    """Preload MyISAM indexes (including the FULLTEXT ones) into the key
-    buffer right after a swap, so the first real searches don't pay for a
-    cold key buffer against a table that's had zero queries against it.
-    `LOAD INDEX INTO CACHE` reads every index block for the named tables —
-    unlike firing sample search queries, it doesn't depend on guessing which
-    terms real users will search next; it guarantees full coverage. Requires
-    key_buffer_size to actually be large enough to hold it all (see
-    mariadb-statefulset.yaml in the k8s repo) or this just thrashes instead
-    of helping."""
-    log.info("warming key buffer for %s...", database)
+    """Preload both cache layers /search depends on, right after a swap, so
+    the first real searches don't land on a table that's had zero queries
+    against it. Two layers, two different tools — neither alone is enough
+    (found live: index-only preload cut a hung >20s query to 3.7s, but a
+    second, unwarmed query still took 24s):
+
+    1. `LOAD INDEX INTO CACHE` preloads every index block (MyISAM key
+       buffer) — needs key_buffer_size big enough to hold it all (see
+       mariadb-statefulset.yaml in the k8s repo) or this just thrashes.
+    2. A forced full scan (`COUNT(*) ... WHERE pk >= 0` — the `WHERE`
+       defeats MyISAM's metadata-only COUNT(*) shortcut) reads every row
+       into the OS/NFS page cache. This is the data-block equivalent of
+       step 1; `CHECKSUM TABLE ... EXTENDED` looks like the obvious SQL
+       tool for this but computes a real per-row hash and didn't finish in
+       2 minutes on these tables — a plain scan did the same I/O in ~8s.
+
+    Both guarantee full coverage regardless of which terms get searched
+    first — unlike firing a fixed list of sample search queries, which only
+    warms exactly the terms in that list."""
+    log.info("warming caches for %s...", database)
     start = time.time()
     conn = db_conn(database)
     with conn.cursor() as cur:
         cur.execute(
-            f"LOAD INDEX INTO CACHE `{database}`.titles, `{database}`.authors, "
-            f"`{database}`.canonical_author, `{database}`.pubs, `{database}`.pub_content"
+            "LOAD INDEX INTO CACHE " + ", ".join(f"`{database}`.{t}" for t in WARM_TABLES)
         )
+        for table, pk in zip(WARM_TABLES, ("title_id", "author_id", "title_id", "pub_id", "pub_id")):
+            cur.execute(f"SELECT COUNT(*) FROM `{database}`.{table} WHERE {pk} >= 0")
     conn.close()
-    log.info("key buffer warm in %.0fs", time.time() - start)
+    log.info("caches warm in %.0fs", time.time() - start)
 
 
 def main():
