@@ -22,21 +22,27 @@ by cloning it at build time, same pattern as the Librarium forks (see
 embedded in the k8s repo; only the deployment manifests and SOPS-encrypted
 config live there.
 
-- Image is **locally built and imported into node containerd**
-  (`ghcr.io/ennui2342/isfdb-mirror:local`, `imagePullPolicy: Never`), not
-  pulled from a registry.
+- Image is **locally built and pushed to the cluster's local registry**
+  (`127.0.0.1:30500/isfdb-mirror:<version>`, `imagePullPolicy: IfNotPresent`).
+- **Every build gets a fresh version tag, never a reused one** — e.g.
+  `1.$(date +%Y%m%d).$(date +%H%M)` (see global `~/.claude/CLAUDE.md`'s
+  containerized-release convention). This used to be a single floating tag
+  (`local`, silently overwritten on every rebuild), which made it impossible
+  to tell which snapshot was actually deployed and invisible to the k8s
+  repo's CVE-reconciliation tooling (needs a parseable version to compare
+  against). Never go back to a floating tag here.
 - Manifests: k8s repo `isfdb/adapter-deployment.yaml`, `refresh-cronjob.yaml`.
   Config (DB creds, ISFDB wiki login) is `isfdb/isfdb-secret.yaml`, SOPS-encrypted.
 - See the k8s repo's `RUNBOOK.md`, section "ISFDB mirror", for the exact
-  clone/build/import/redeploy commands, and its `CLAUDE.md`'s isfdb-mirror
+  clone/build/push/redeploy commands, and its `CLAUDE.md`'s isfdb-mirror
   table row for the running-service picture (namespace, CronJob schedule).
-- Deploy loop when this repo changes: edit → rebuild → `docker save` → `scp`
-  to master → `scp` to both workers → `k3s ctr images import` on each worker
-  → `kubectl rollout restart` (adapter) / next scheduled run (refresh CronJob).
-  There used to be a second, embedded copy of this source directly in the
-  k8s repo (predating this repo's existence as a public project) — it's been
-  removed now that this repo is the real thing, so there's nothing left to
-  keep in sync.
+- Deploy loop when this repo changes: edit → rebuild → `docker build -t
+  192.168.0.8:30500/isfdb-mirror:<tag> .` → `docker push` → update the k8s
+  manifest's `image:` tag → commit/push → Flux reconciles (adapter) / next
+  scheduled run (refresh CronJob). There used to be a second, embedded copy
+  of this source directly in the k8s repo (predating this repo's existence
+  as a public project) — it's been removed now that this repo is the real
+  thing, so there's nothing left to keep in sync.
 
 ## License
 
