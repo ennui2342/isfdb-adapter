@@ -214,6 +214,11 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         "language": language or "",
         "page_count": parse_page_count(pub.get("pub_pages")),
         "categories": [],
+        # Raw ISFDB pub_ptype ("hc", "tp", "pb", "ebook", "audio CD", ...) —
+        # consumers map this to their own format/binding vocabulary rather
+        # than the adapter guessing at a canonical mapping that's really
+        # Librarium-specific (see librarium-api's mapISFDBBinding).
+        "binding": pub.get("pub_ptype") or "",
         # extras, not part of Librarium's BookResult but useful for debugging
         "_isfdb_pub_id": pub["pub_id"],
         "_isfdb_title_id": (title_row or {}).get("title_id"),
