@@ -6,7 +6,10 @@ mirror. Originally built as the backend for Librarium's ISFDB metadata
 provider, but generic enough for any consumer that wants ISFDB data.
 
 Endpoints:
-  GET /isbn/{isbn}                book lookup by ISBN-10 or ISBN-13
+  GET /isbn/{isbn}                book lookup by ISBN-10 or ISBN-13 (most
+                                   recent printing sharing the ISBN, if
+                                   more than one); ?all=true returns every
+                                   matching printing instead of just one
   GET /search?q=                  freetext title/author search
   GET /series/search?q=           freetext series-name search
   GET /series/{series_id}/volumes ordered per-volume list for a series
@@ -233,7 +236,7 @@ def health():
 
 
 @app.get("/isbn/{isbn}")
-def lookup_isbn(isbn: str):
+def lookup_isbn(isbn: str, all: bool = False):
     # Query pub_isbn directly (unwrapped) so MySQL can use its existing
     # index. An earlier version wrapped it in REPLACE(REPLACE(...)) to
     # tolerate hyphens/spaces "just in case" — that defensive wrapping
@@ -241,9 +244,34 @@ def lookup_isbn(isbn: str):
     # (took 2.5+ minutes cold in production). ISFDB's pub_isbn is verified
     # clean (checked: 0 of 664044 non-empty values contain a hyphen or
     # space), so candidates are normalized client-side instead.
+    #
+    # An ISBN isn't always unique to one pub: confirmed against real data
+    # (2026-08-10) that 28,102 of 626,332 distinct pub_isbn values in the
+    # mirror belong to more than one pub — and for opsimath's own library
+    # specifically, 565 of 1,493 ISBNs matched at all (~38%) hit this,
+    # skewed high by how often vintage mass-market SF gets reprinted under
+    # the same ISBN. Default behavior (all=False, unchanged from before
+    # this comment — librarium's own existing integration depends on this
+    # single-object shape) picks the most recent printing sharing the
+    # ISBN, same as always. `all=True` is additive: returns every
+    # candidate instead, so a caller that already has its own signal for
+    # which specific printing it means (e.g. a previously-recorded
+    # publish year) can pick the right one itself rather than trusting a
+    # blind "latest wins" default — see opsimath's Enrichment::IsfdbEditionEnricher.
     candidates = isbn_candidates(isbn)
     with db() as conn, conn.cursor() as cur:
         placeholders = ", ".join(["%s"] * len(candidates))
+        if all:
+            cur.execute(
+                f"SELECT * FROM pubs WHERE pub_isbn IN ({placeholders}) "
+                f"ORDER BY pub_year DESC",
+                candidates,
+            )
+            pubs = cur.fetchall()
+            if not pubs:
+                raise HTTPException(status_code=404, detail="isbn not found")
+            return [book_result_from_pub(cur, pub) for pub in pubs]
+
         cur.execute(
             f"SELECT * FROM pubs WHERE pub_isbn IN ({placeholders}) "
             f"ORDER BY pub_year DESC LIMIT 1",
