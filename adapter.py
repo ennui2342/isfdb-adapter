@@ -10,6 +10,8 @@ Endpoints:
                                    recent printing sharing the ISBN, if
                                    more than one); ?all=true returns every
                                    matching printing instead of just one
+  GET /isbn/{isbn}/editions       every publication of the same work as
+                                   this ISBN, regardless of their own ISBN
   GET /search?q=                  freetext title/author search
   GET /series/search?q=           freetext series-name search
   GET /series/{series_id}/volumes ordered per-volume list for a series
@@ -281,6 +283,56 @@ def lookup_isbn(isbn: str, all: bool = False):
         if not pub:
             raise HTTPException(status_code=404, detail="isbn not found")
         return book_result_from_pub(cur, pub)
+
+
+@app.get("/isbn/{isbn}/editions")
+def lookup_isbn_editions(isbn: str):
+    """Given an ISBN, resolve it to its title(s) (a reused ISBN can
+    legitimately belong to more than one — no assumption made here that
+    it's exactly one) and return every publication under all of them —
+    i.e. every other edition/printing/ISBN of the same work, not just
+    ones sharing this exact ISBN. Distinct from `?all=true` above: that
+    stays scoped to "other pubs with this same ISBN" (the reused-ISBN
+    case), this is "every pub of the same title regardless of its own
+    ISBN" — the broader candidate set a caller matching by something
+    other than ISBN (e.g. a cover image) actually needs. Same per-title
+    query /search already uses per matched title, just entered via a
+    known ISBN instead of a fuzzy text match — exact and index-backed,
+    not a FULLTEXT score to compute.
+    """
+    candidates = isbn_candidates(isbn)
+    with db() as conn, conn.cursor() as cur:
+        placeholders = ", ".join(["%s"] * len(candidates))
+        cur.execute(f"SELECT pub_id FROM pubs WHERE pub_isbn IN ({placeholders})", candidates)
+        pub_ids = [r["pub_id"] for r in cur.fetchall()]
+        if not pub_ids:
+            raise HTTPException(status_code=404, detail="isbn not found")
+
+        pub_placeholders = ", ".join(["%s"] * len(pub_ids))
+        cur.execute(
+            f"""
+            SELECT DISTINCT t.title_id FROM pub_content pc
+            JOIN titles t ON t.title_id = pc.title_id
+            WHERE pc.pub_id IN ({pub_placeholders}) AND t.title_ttype IN %s
+            """,
+            (*pub_ids, BOOK_TTYPES),
+        )
+        title_ids = [r["title_id"] for r in cur.fetchall()]
+        if not title_ids:
+            raise HTTPException(status_code=404, detail="isbn found but not linked to a book-type title")
+
+        title_placeholders = ", ".join(["%s"] * len(title_ids))
+        cur.execute(
+            f"""
+            SELECT DISTINCT p.* FROM pub_content pc
+            JOIN pubs p ON p.pub_id = pc.pub_id
+            WHERE pc.title_id IN ({title_placeholders})
+            ORDER BY (p.pub_year IS NULL OR p.pub_year IN ('0000-00-00', '8888-00-00')) ASC, p.pub_year ASC
+            """,
+            title_ids,
+        )
+        pubs = cur.fetchall()
+        return [book_result_from_pub(cur, pub) for pub in pubs]
 
 
 @app.get("/search")
