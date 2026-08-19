@@ -29,6 +29,7 @@ import zipfile
 import cloudscraper
 import gdown
 import pymysql
+import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -41,6 +42,17 @@ DB_HOST = os.environ.get("DB_HOST", "isfdb-db")
 DB_PORT = int(os.environ.get("DB_PORT", "3306"))
 DB_USER = os.environ.get("DB_USER", "root")
 DB_PASSWORD = os.environ["MARIADB_ROOT_PASSWORD"]
+
+# Optional — same "visibility layer, never load-bearing" stance as
+# opsimath's own Notifications::DiscordNotifier (same bot REST API,
+# same channel). Mark, 2026-08-19: this run has zero visibility anywhere
+# (plain stdout logging only) and he suspects it causes a brief load/
+# latency blip while importing/rebuilding indexes — wants to correlate
+# against that, which needs to know *when* a run starts and how long it
+# actually took, not just success/failure after the fact.
+DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+DISCORD_CHANNEL_ID = os.environ.get("DISCORD_CHANNEL_ID")
+DISCORD_COLOR_BY_LEVEL = {"info": 0x5865F2, "warn": 0xFAA61A, "error": 0xED4245}
 
 DOWNLOADS_URL = "https://www.isfdb.org/wiki/index.php/ISFDB_Downloads"
 LOGIN_URL = "https://www.isfdb.org/wiki/index.php/Special:UserLogin?returnto=ISFDB+Downloads"
@@ -60,6 +72,31 @@ WANTED_TABLES = frozenset({
     "authors", "canonical_author", "languages", "notes", "pseudonyms",
     "pub_authors", "pub_content", "publishers", "pubs", "series", "titles",
 })
+
+
+def notify_discord(title: str, fields: dict, level: str = "info") -> None:
+    """POST /channels/{id}/messages via the Discord bot REST API — the
+    exact same mechanism and channel opsimath's own DiscordNotifier
+    posts to, so these show up alongside opsimath's own notifications
+    for easy correlation. Does nothing if not configured. A notification
+    failure must never fail the refresh itself — logged and swallowed,
+    same as opsimath's own Notifications.notify does on its side.
+    """
+    if not DISCORD_BOT_TOKEN or not DISCORD_CHANNEL_ID:
+        return
+    try:
+        requests.post(
+            f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages",
+            headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
+            json={"embeds": [{
+                "title": title,
+                "color": DISCORD_COLOR_BY_LEVEL.get(level, DISCORD_COLOR_BY_LEVEL["info"]),
+                "fields": [{"name": k, "value": str(v) or "—", "inline": True} for k, v in fields.items()],
+            }]},
+            timeout=10,
+        )
+    except Exception as e:
+        log.warning("discord notification failed: %s", e)
 
 
 def login_and_get_downloads_page() -> tuple[cloudscraper.CloudScraper, str]:
@@ -248,7 +285,7 @@ def build_search_indexes(database: str):
     conn.close()
 
 
-def sanity_check(database: str):
+def sanity_check(database: str) -> tuple[int, int]:
     conn = db_conn(database)
     with conn.cursor() as cur:
         cur.execute(f"SELECT count(*) AS n FROM `{database}`.titles")
@@ -262,6 +299,7 @@ def sanity_check(database: str):
             f"staging import looks truncated (titles={titles}, pubs={pubs}); "
             f"expected at least titles={MIN_TITLES}, pubs={MIN_PUBS} — aborting swap"
         )
+    return titles, pubs
 
 
 def atomic_swap(staging_db: str, live_db: str):
@@ -329,10 +367,19 @@ def warm_caches(database: str):
 
 
 def main():
+    run_start = time.time()
     log.info("checking ISFDB downloads page for a new backup...")
     scraper, html = login_and_get_downloads_page()
     drive_url, backup_date = find_latest_backup_url(html)
     log.info("latest 5.5-compatible backup: %s (%s)", backup_date, drive_url)
+
+    # Mark, 2026-08-19: the actual DB load happens well after this point
+    # (import_dump/build_search_indexes/atomic_swap/warm_caches, ~20+ of
+    # the ~25 total minutes) — but the run's own start time is what's
+    # needed to correlate against a latency blip noticed elsewhere, and
+    # by the time a completion notification could fire it's too late to
+    # tell that from a report that only arrives after the fact.
+    notify_discord("isfdb-refresh starting", {"backup": backup_date})
 
     with tempfile.TemporaryDirectory() as tmpdir:
         zip_path = os.path.join(tmpdir, "isfdb-backup.zip")
@@ -350,16 +397,22 @@ def main():
 
         import_dump(filtered_path, "isfdb_staging")
         build_search_indexes("isfdb_staging")
-        sanity_check("isfdb_staging")
+        titles, pubs = sanity_check("isfdb_staging")
         atomic_swap("isfdb_staging", "isfdb")
         warm_caches("isfdb")
 
+    duration = time.time() - run_start
     log.info("refresh complete — mirror now at %s", backup_date)
+    notify_discord("isfdb-refresh complete", {
+        "backup": backup_date, "titles": titles, "pubs": pubs,
+        "duration": f"{duration/60:.1f}m",
+    })
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
+    except Exception as e:
         log.exception("refresh failed")
+        notify_discord("isfdb-refresh failed", {"error": f"{type(e).__name__}: {e}"}, level="error")
         sys.exit(1)
