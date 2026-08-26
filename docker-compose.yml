@@ -44,8 +44,6 @@ services:
       DB_USER: root
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set a root password}
       DB_NAME: isfdb
-      ISFDB_WIKI_USERNAME: ${ISFDB_WIKI_USERNAME:?set your isfdb.org wiki username}
-      ISFDB_WIKI_PASSWORD: ${ISFDB_WIKI_PASSWORD:?set your isfdb.org wiki password}
     profiles:
       - refresh
 

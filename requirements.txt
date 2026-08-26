@@ -1,7 +1,5 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pymysql==1.1.1
-cloudscraper==1.2.71
-beautifulsoup4==4.12.3
 gdown==5.2.0
 requests==2.32.3

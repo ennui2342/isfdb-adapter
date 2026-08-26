@@ -6,10 +6,10 @@ for SFF, especially older, small-press, and non-US editions that Open
 Library, Google Books, and Hardcover often don't carry at all.
 
 This exists because **ISFDB has no public API.** The site is behind
-Cloudflare, and the only distribution of its data is a weekly MySQL dump
-posted to a login-gated wiki page, linked from a Google Drive URL that
-changes every week. `refresh.py` handles that whole pipeline — login,
-find the current backup link, download, import — so you always have a
+Cloudflare, and the only distribution of its data is a weekly MySQL dump.
+ISFDB publishes each week's dump to a shared, publicly-viewable Google
+Drive folder; `refresh.py` handles the whole pipeline — find the current
+week's file in that folder, download, import — so you always have a
 local, queryable mirror. `adapter.py` is the API layer in front of it.
 
 It was built as the backend for [Librarium](https://github.com/FireBall1725/librarium-api)'s
@@ -19,18 +19,22 @@ generic enough to use from anything else that wants ISFDB data.
 ## Architecture
 
 ```
-ISFDB wiki (login-gated) ──weekly──▶ refresh.py ──imports──▶ MariaDB ◀──queries── adapter.py ──JSON──▶ your app
+ISFDB Backups Drive folder (public) ──weekly──▶ refresh.py ──imports──▶ MariaDB ◀──queries── adapter.py ──JSON──▶ your app
 ```
 
-- **`refresh.py`** — logs into the ISFDB wiki (`cloudscraper` handles
-  Cloudflare's JS challenge, then a plain form POST handles the wiki login),
-  finds the current week's Google Drive backup link, downloads it (`gdown`),
-  extracts and filters it down to the tables this adapter actually needs
-  (~50% smaller import), and atomically swaps it into the live database via
-  `RENAME TABLE` — a failed or interrupted refresh leaves last week's data
-  live, never a half-imported DB. Run it on a schedule (cron, a Kubernetes
-  CronJob, whatever you've got); see `docker-compose.yml` for a manual/cron
-  invocation.
+- **`refresh.py`** — lists ISFDB's shared "Backups" Google Drive folder
+  (public, no login needed) for the current week's dump, downloads it
+  (`gdown`), extracts and filters it down to the tables this adapter
+  actually needs (~50% smaller import), and atomically swaps it into the
+  live database via `RENAME TABLE` — a failed or interrupted refresh leaves
+  last week's data live, never a half-imported DB. Run it on a schedule
+  (cron, a Kubernetes CronJob, whatever you've got); see
+  `docker-compose.yml` for a manual/cron invocation.
+  This used to go via the ISFDB wiki's login-gated downloads page instead
+  (`cloudscraper` handling Cloudflare's JS challenge, then a form POST for
+  the wiki login) — that broke when Cloudflare's protection started
+  blocking `cloudscraper` too. ISFDB shared the Drive folder directly as
+  the replacement.
 - **`adapter.py`** — a FastAPI app that queries the mirror and returns JSON
   shaped for easy consumption (ISBN-10/13 normalization, MySQL's zero-date
   quirks cleaned up, FULLTEXT-indexed search instead of `LIKE '%...%'` full
@@ -39,7 +43,7 @@ ISFDB wiki (login-gated) ──weekly──▶ refresh.py ──imports──▶
 ## Quickstart
 
 ```sh
-cp .env.example .env   # fill in MARIADB_ROOT_PASSWORD + your ISFDB wiki credentials
+cp .env.example .env   # fill in MARIADB_ROOT_PASSWORD
 docker compose up -d db adapter
 docker compose --profile refresh run --rm refresh   # first import — takes ~20-25 minutes
 curl http://localhost:8080/isbn/0441172717
@@ -56,7 +60,6 @@ running this in a cluster instead.
 |---|---|---|---|
 | `MARIADB_ROOT_PASSWORD` | both | yes | |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | both | no | default to `db` / `3306` / `root` / `isfdb` |
-| `ISFDB_WIKI_USERNAME` / `ISFDB_WIKI_PASSWORD` | `refresh.py` | yes | a free account registered at isfdb.org's wiki |
 
 ## API
 

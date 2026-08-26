@@ -3,20 +3,22 @@
 
 """Weekly ISFDB mirror refresh.
 
-1. Log into the ISFDB wiki. It's behind Cloudflare's JS challenge, which is
-   why this uses `cloudscraper` rather than plain `requests` — a bare
-   `requests` session gets a 503 challenge page back instead of the site.
-2. Scrape the "Database Backups" table on ISFDB_Downloads for the newest
-   5.5-compatible MySQL dump's Google Drive link.
-3. Download it via gdown (handles Google Drive's large-file confirm-token
+1. List ISFDB's shared "Backups" Google Drive folder (public, no login) for
+   the newest 5.5-compatible MySQL dump. This used to go via the ISFDB wiki
+   downloads page instead, scraping the same Drive link out of a "Database
+   Backups" table there — that broke when Cloudflare's protection on the
+   wiki started blocking `cloudscraper` too; ISFDB shared this folder
+   directly as the replacement, so it's now the primary source.
+2. Download it via gdown (handles Google Drive's large-file confirm-token
    flow) to a local scratch file.
-4. Import into a staging database, sanity-check row counts, then atomically
+3. Import into a staging database, sanity-check row counts, then atomically
    swap it in for the live `isfdb` database via a single multi-table RENAME.
-5. Delete the scratch file and the previous week's now-orphaned tables.
+4. Delete the scratch file and the previous week's now-orphaned tables.
 
 A failed run leaves last week's data live — the swap only happens after the
 staging import is verified.
 """
+import datetime
 import logging
 import os
 import re
@@ -26,18 +28,13 @@ import tempfile
 import time
 import zipfile
 
-import cloudscraper
 import gdown
 import pymysql
 import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("isfdb-refresh")
 
-WIKI_USERNAME = os.environ["ISFDB_WIKI_USERNAME"]
-WIKI_PASSWORD = os.environ["ISFDB_WIKI_PASSWORD"]
 DB_HOST = os.environ.get("DB_HOST", "isfdb-db")
 DB_PORT = int(os.environ.get("DB_PORT", "3306"))
 DB_USER = os.environ.get("DB_USER", "root")
@@ -54,8 +51,16 @@ DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_CHANNEL_ID = os.environ.get("DISCORD_CHANNEL_ID")
 DISCORD_COLOR_BY_LEVEL = {"info": 0x5865F2, "warn": 0xFAA61A, "error": 0xED4245}
 
-DOWNLOADS_URL = "https://www.isfdb.org/wiki/index.php/ISFDB_Downloads"
-LOGIN_URL = "https://www.isfdb.org/wiki/index.php/Special:UserLogin?returnto=ISFDB+Downloads"
+# ISFDB's shared "Backups" folder — public, "Anyone with the link" viewer,
+# no auth needed. Confirmed 2026-08-26 against
+# https://drive.google.com/drive/u/0/folders/1Rwb0APUw2HwHo5uLqCRe52hDlyVkKeHv
+BACKUPS_FOLDER_ID = "1Rwb0APUw2HwHo5uLqCRe52hDlyVkKeHv"
+
+# ISFDB posts a new backup roughly weekly; if the newest one we can see is
+# older than this, either they've missed a week or find_latest_backup's
+# folder scrape (see its docstring) silently returned a stale view — either
+# way, better to fail loudly than mirror an old snapshot.
+MAX_BACKUP_AGE_DAYS = 14
 
 # Sanity thresholds — ISFDB is a large, long-running database; a dump with
 # fewer rows than this is almost certainly a truncated/failed download.
@@ -99,71 +104,54 @@ def notify_discord(title: str, fields: dict, level: str = "info") -> None:
         log.warning("discord notification failed: %s", e)
 
 
-def login_and_get_downloads_page() -> tuple[cloudscraper.CloudScraper, str]:
-    scraper = cloudscraper.create_scraper()
-
-    r1 = scraper.get(LOGIN_URL)
-    r1.raise_for_status()
-    soup = BeautifulSoup(r1.text, "html.parser")
-    form = soup.find("form", {"name": "userlogin"})
-    if form is None:
-        raise RuntimeError("login form not found — ISFDB page structure may have changed")
-    action = urljoin(r1.url, form["action"])
-    payload = {inp.get("name"): inp.get("value", "") for inp in form.find_all("input") if inp.get("name")}
-    payload["wpName"] = WIKI_USERNAME
-    payload["wpPassword"] = WIKI_PASSWORD
-    payload["wploginattempt"] = "Log in"
-
-    r2 = scraper.post(action, data=payload)
-    r2.raise_for_status()
-
-    r3 = scraper.get(DOWNLOADS_URL)
-    r3.raise_for_status()
-    if "Login required" in r3.text[:600]:
-        raise RuntimeError("login did not succeed — check ISFDB_WIKI_USERNAME/PASSWORD")
-
-    return scraper, r3.text
+# Matches this folder's naming convention, e.g. backup-MySQL-55-2026-08-22.zip
+_BACKUP_NAME_RE = re.compile(r"^backup-MySQL-55-(\d{4}-\d{2}-\d{2})\.zip$")
 
 
-def find_latest_backup_url(downloads_html: str) -> tuple[str, str]:
-    """Returns (drive_url, date) for the newest 5.5-compatible MySQL dump."""
-    soup = BeautifulSoup(downloads_html, "html.parser")
+def find_latest_backup() -> tuple[str, str]:
+    """Returns (file_id, date) for the newest 5.5-compatible MySQL dump in
+    ISFDB's shared Backups Drive folder.
+
+    gdown's folder listing scrapes a preview payload Google embeds in the
+    folder page's HTML rather than paginating the true full listing — for a
+    folder this size (hundreds of files going back to 2019) it only returns
+    a few dozen entries. But that snippet has reliably spanned both ends of
+    the name-sorted list in testing, which is enough since we only need the
+    newest file (names sort chronologically, being zero-padded ISO dates)
+    — and MAX_BACKUP_AGE_DAYS below catches it if that ever stops holding.
+    """
+    entries = gdown.download_folder(
+        id=BACKUPS_FOLDER_ID, skip_download=True, quiet=True, remaining_ok=True,
+    )
+    if not entries:
+        raise RuntimeError(
+            "could not list ISFDB backups Drive folder — folder id or sharing may have changed"
+        )
+
     best_date = None
-    best_url = None
-    for a in soup.find_all("a", href=True):
-        if "drive.google.com" not in a["href"]:
+    best_id = None
+    for entry in entries:
+        m = _BACKUP_NAME_RE.match(entry.path)
+        if not m:
             continue
-        row = a.find_parent("tr")
-        if row is None:
-            continue
-        table = a.find_parent("table")
-        heading = table.find_previous(["h2", "h3", "h4"]) if table else None
-        if not heading or "Database Backups" not in heading.get_text():
-            continue
-        header_row = table.find("tr")
-        headers = [c.get_text(strip=True) for c in header_row.find_all(["td", "th"])]
-        if "5.5-compatible" not in headers:
-            continue
-        cells = row.find_all(["td", "th"])
-        if len(cells) < 2:
-            continue
-        date_text = cells[0].get_text(strip=True)
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_text):
-            continue
+        date_text = m.group(1)
         if best_date is None or date_text > best_date:
             best_date = date_text
-            best_url = a["href"]
+            best_id = entry.id
 
-    if best_url is None:
-        raise RuntimeError("no 5.5-compatible backup link found — ISFDB downloads page structure may have changed")
-    return best_url, best_date
+    if best_id is None:
+        raise RuntimeError(
+            "no backup-MySQL-55-*.zip files found in Drive folder — naming convention may have changed"
+        )
 
+    age_days = (datetime.date.today() - datetime.date.fromisoformat(best_date)).days
+    if age_days > MAX_BACKUP_AGE_DAYS:
+        raise RuntimeError(
+            f"newest backup found is {best_date} ({age_days}d old) — expected a new one roughly "
+            f"weekly; either ISFDB hasn't posted one or the Drive folder scrape missed it"
+        )
 
-def drive_id_from_url(url: str) -> str:
-    m = re.search(r"/d/([^/]+)/", url)
-    if not m:
-        raise RuntimeError(f"could not parse Google Drive file id from {url}")
-    return m.group(1)
+    return best_id, best_date
 
 
 def extract_dump(zip_path: str, tmpdir: str) -> str:
@@ -368,10 +356,9 @@ def warm_caches(database: str):
 
 def main():
     run_start = time.time()
-    log.info("checking ISFDB downloads page for a new backup...")
-    scraper, html = login_and_get_downloads_page()
-    drive_url, backup_date = find_latest_backup_url(html)
-    log.info("latest 5.5-compatible backup: %s (%s)", backup_date, drive_url)
+    log.info("checking ISFDB backups Drive folder for a new dump...")
+    file_id, backup_date = find_latest_backup()
+    log.info("latest 5.5-compatible backup: %s (id=%s)", backup_date, file_id)
 
     # Mark, 2026-08-19: the actual DB load happens well after this point
     # (import_dump/build_search_indexes/atomic_swap/warm_caches, ~20+ of
@@ -383,7 +370,6 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         zip_path = os.path.join(tmpdir, "isfdb-backup.zip")
-        file_id = drive_id_from_url(drive_url)
         log.info("downloading via gdown (id=%s)...", file_id)
         start = time.time()
         gdown.download(f"https://drive.google.com/uc?id={file_id}", output=zip_path, quiet=False)
