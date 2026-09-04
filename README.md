@@ -83,12 +83,18 @@ curl http://localhost:8080/isbn/0441172717
 {
   "provider": "isfdb", "provider_display": "ISFDB",
   "title": "Dune", "subtitle": "", "authors": ["Frank Herbert"],
+  "cover_artists": ["John Schoenherr"],
   "publisher": "Ace Books", "publish_date": "2010",
   "isbn_10": "0441172717", "isbn_13": "9780441172719",
   "description": "", "cover_url": "", "language": "eng", "page_count": 883,
   "categories": []
 }
 ```
+
+`cover_artists` is genuinely per-publication (ISFDB credits cover art via its
+own `COVERART`-typed title linked to this exact printing, distinct from the
+work's own author(s)) — `[]` when ISFDB has no cover-art credit on file for
+this printing, not when there's simply no cover.
 
 Note the caveat this adapter can't fully solve: ISFDB sometimes reuses one
 ISBN across several distinct print runs of the same book (a UK paperback

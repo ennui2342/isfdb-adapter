@@ -183,6 +183,25 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         )
         authors = [r["author_canonical"] for r in cur.fetchall()]
 
+    # Cover art credit, genuinely edition-level (unlike everything else
+    # here, which comes off the shared title record): ISFDB tracks it as
+    # its own COVERART title linked to this exact publication via
+    # pub_content, with its own canonical_author(s) — a printing can be
+    # re-illustrated on reissue while the underlying NOVEL title (and its
+    # authors, above) stays the same.
+    cur.execute(
+        """
+        SELECT a.author_canonical
+        FROM pub_content pc
+        JOIN titles t ON t.title_id = pc.title_id
+        JOIN canonical_author ca ON ca.title_id = t.title_id
+        JOIN authors a ON a.author_id = ca.author_id
+        WHERE pc.pub_id = %s AND t.title_ttype = 'COVERART'
+        """,
+        (pub["pub_id"],),
+    )
+    cover_artists = [r["author_canonical"] for r in cur.fetchall()]
+
     language = None
     if title_row and title_row.get("title_language"):
         cur.execute("SELECT lang_code FROM languages WHERE lang_id = %s", (title_row["title_language"],))
@@ -210,6 +229,7 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         "title": (title_row or {}).get("title_title") or pub.get("pub_title") or "",
         "subtitle": "",
         "authors": authors,
+        "cover_artists": cover_artists,
         "publisher": publisher or "",
         "publish_date": date_str(pub.get("pub_year")),
         "isbn_10": isbn10 or "",
