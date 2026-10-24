@@ -529,7 +529,10 @@ def search_authors(q: str, limit: int = 20):
 
 
 @app.get("/authors/{author_id}")
-def fetch_author(author_id: int):
+def fetch_author(author_id: int, works: bool = True):
+    # works=false skips the bibliography — one query per title, so ~27s
+    # for a prolific author (Asimov, 768 works) — for callers that only
+    # need the profile itself (e.g. opsimath's living/dead check).
     with db() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM authors WHERE author_id = %s", (author_id,))
         author = cur.fetchone()
@@ -548,18 +551,21 @@ def fetch_author(author_id: int):
         )
         pseudonym_ids = [r["pseudonym"] for r in cur.fetchall()]
 
-        cur.execute(
-            """
-            SELECT DISTINCT t.title_id, t.title_title, t.title_copyright
-            FROM canonical_author ca
-            JOIN titles t ON t.title_id = ca.title_id
-            WHERE ca.author_id = %s AND t.title_ttype IN %s
-            ORDER BY t.title_copyright ASC
-            """,
-            (author_id, BOOK_TTYPES),
-        )
-        works = []
-        for t in cur.fetchall():
+        titles = []
+        if works:
+            cur.execute(
+                """
+                SELECT DISTINCT t.title_id, t.title_title, t.title_copyright
+                FROM canonical_author ca
+                JOIN titles t ON t.title_id = ca.title_id
+                WHERE ca.author_id = %s AND t.title_ttype IN %s
+                ORDER BY t.title_copyright ASC
+                """,
+                (author_id, BOOK_TTYPES),
+            )
+            titles = cur.fetchall()
+        works_out = []
+        for t in titles:
             cur.execute(
                 """
                 SELECT p.pub_isbn, p.pub_frontimage FROM pub_content pc
@@ -574,7 +580,7 @@ def fetch_author(author_id: int):
             isbn = clean_isbn(pub.get("pub_isbn") or "")
             isbn10 = isbn if len(isbn) == 10 else (isbn13_to_10(isbn) if len(isbn) == 13 else None)
             isbn13 = isbn if len(isbn) == 13 else (isbn10_to_13(isbn) if len(isbn) == 10 else None)
-            works.append({
+            works_out.append({
                 "title": t["title_title"],
                 "isbn_13": isbn13 or "",
                 "isbn_10": isbn10 or "",
@@ -593,7 +599,7 @@ def fetch_author(author_id: int):
             "nationality": "",
             "photo_url": author.get("author_image") or "",
             "pseudonym_ids": [str(p) for p in pseudonym_ids],
-            "works": works,
+            "works": works_out,
         }
 
 

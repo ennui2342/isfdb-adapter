@@ -150,7 +150,10 @@ exist or has no book-length entries.
 
 Full author profile: bio (from ISFDB's own author note, if any),
 pseudonym cross-references, and a bibliography with one representative
-edition's ISBN/cover per work.
+edition's ISBN/cover per work. `?works=false` returns `"works": []` and
+skips the bibliography, which costs one query per title (~27s for a
+prolific author) — for callers that only need the profile, e.g. the
+living/dead check.
 
 ```json
 {
