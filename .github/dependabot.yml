@@ -1,0 +1,23 @@
+# Supply chain for isfdb-adapter (Python, its own image). No CI here and
+# deploys are manual (k8s repo, local registry), so nothing auto-merges:
+# Dependabot's PRs — security fixes immediately, routine updates after a
+# release cooldown — wait for a human, who rebuilds and redeploys.
+version: 2
+updates:
+- package-ecosystem: pip
+  directory: "/"
+  schedule:
+    interval: weekly
+  cooldown:
+    default-days: 7
+    semver-major-days: 14
+  groups:
+    minor-and-patch:
+      update-types: [minor, patch]
+
+- package-ecosystem: docker
+  directory: "/"
+  schedule:
+    interval: weekly
+  cooldown:
+    default-days: 7
