@@ -1,5 +1,5 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pymysql==1.1.1
-gdown==5.2.2
+gdown==6.4.2
 requests==2.33.0
