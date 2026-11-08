@@ -124,6 +124,8 @@ Every printing result now also carries `pub_series`, `pub_series_num` and
 It also names the title's story series: `series` (The Snow Queen Cycle)
 beside `_isfdb_series_id` and `_isfdb_series_num` (empty / null when the
 title isn't in one).
+`_isfdb_author_ids` lists each of `authors`' ISFDB author ids, in the same
+order.
 
 ### `GET /search?q=&limit=20&editions_per_title=10`
 

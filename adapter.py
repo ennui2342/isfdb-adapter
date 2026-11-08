@@ -184,29 +184,34 @@ def book_result_from_pub(cur, pub: dict) -> dict:
     )
     title_row = cur.fetchone()
 
+    # Authors with their ISFDB ids (parallel lists), so a consumer can tie
+    # its own author records to ISFDB's through the books, not by name.
     authors: list[str] = []
+    author_ids: list[int] = []
     if title_row:
         cur.execute(
             """
-            SELECT a.author_canonical
+            SELECT a.author_id, a.author_canonical
             FROM canonical_author ca
             JOIN authors a ON a.author_id = ca.author_id
             WHERE ca.title_id = %s
             """,
             (title_row["title_id"],),
         )
-        authors = [r["author_canonical"] for r in cur.fetchall()]
+        rows = cur.fetchall()
+        authors, author_ids = [r["author_canonical"] for r in rows], [r["author_id"] for r in rows]
     if not authors:
         cur.execute(
             """
-            SELECT a.author_canonical
+            SELECT a.author_id, a.author_canonical
             FROM pub_authors pa
             JOIN authors a ON a.author_id = pa.author_id
             WHERE pa.pub_id = %s
             """,
             (pub["pub_id"],),
         )
-        authors = [r["author_canonical"] for r in cur.fetchall()]
+        rows = cur.fetchall()
+        authors, author_ids = [r["author_canonical"] for r in rows], [r["author_id"] for r in rows]
 
     # Cover art credit, genuinely edition-level (unlike everything else
     # here, which comes off the shared title record): ISFDB tracks it as
@@ -269,6 +274,7 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         "title": (title_row or {}).get("title_title") or pub.get("pub_title") or "",
         "subtitle": "",
         "authors": authors,
+        "_isfdb_author_ids": author_ids,
         "cover_artists": cover_artists,
         "publisher": publisher or "",
         "publish_date": date_str(pub.get("pub_year")),
