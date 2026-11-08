@@ -680,9 +680,12 @@ def fetch_author(author_id: int, works: bool = True):
         if works:
             cur.execute(
                 """
-                SELECT DISTINCT t.title_id, t.title_title, t.title_copyright
+                SELECT DISTINCT t.title_id, t.title_title, t.title_copyright, t.title_ttype, t.title_parent,
+                       t.series_id, t.title_seriesnum, s.series_title, l.lang_code
                 FROM canonical_author ca
                 JOIN titles t ON t.title_id = ca.title_id
+                LEFT JOIN series s ON s.series_id = t.series_id
+                LEFT JOIN languages l ON l.lang_id = t.title_language
                 WHERE ca.author_id = %s AND t.title_ttype IN %s
                 ORDER BY t.title_copyright ASC
                 """,
@@ -711,6 +714,17 @@ def fetch_author(author_id: int, works: bool = True):
                 "isbn_10": isbn10 or "",
                 "publish_year": date_year(t.get("title_copyright")),
                 "cover_url": pub.get("pub_frontimage") or "",
+                # Added 2026-11-08 for opsimath's author pages: which title,
+                # what kind (NOVEL, OMNIBUS…), its language, the title it's
+                # a variant of (a retitling or translation; null if none),
+                # and its series.
+                "_isfdb_title_id": t["title_id"],
+                "type": t.get("title_ttype") or "",
+                "language": t.get("lang_code") or "",
+                "variant_of": t.get("title_parent") or None,
+                "_isfdb_series_id": t.get("series_id"),
+                "_isfdb_series_num": t.get("title_seriesnum"),
+                "series": t.get("series_title") or "",
             })
 
         return {
