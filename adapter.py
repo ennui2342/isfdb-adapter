@@ -40,7 +40,12 @@ DB_USER = os.environ.get("DB_USER", "root")
 DB_PASSWORD = os.environ.get("MARIADB_ROOT_PASSWORD", "")
 DB_NAME = os.environ.get("DB_NAME", "isfdb")
 
-BOOK_TTYPES = ("NOVEL", "COLLECTION", "OMNIBUS", "CHAPBOOK")
+# Book-length title types. ANTHOLOGY and NONFICTION are books too — leaving
+# them out meant an anthology's ISBN came back with no title id, its
+# printings couldn't be listed, and search never found it (opsimath,
+# Continuum 4, 2026-11-08). MAGAZINE/FANZINE issues are periodicals, not
+# books, and stay out.
+BOOK_TTYPES = ("NOVEL", "COLLECTION", "OMNIBUS", "CHAPBOOK", "ANTHOLOGY", "NONFICTION")
 
 _ISBN_CLEAN_RE = re.compile(r"[^0-9Xx]")
 

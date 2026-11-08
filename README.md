@@ -65,8 +65,8 @@ running this in a cluster instead.
 
 All endpoints return `404` for "not found" and `503` on a database error
 (e.g. mid-refresh). Book-length works only (`NOVEL`, `COLLECTION`,
-`OMNIBUS`, `CHAPBOOK`) — short fiction, essays, and interior art aren't
-included.
+`OMNIBUS`, `CHAPBOOK`, `ANTHOLOGY`, `NONFICTION`) — short fiction, essays,
+interior art and magazine issues aren't included.
 
 ### `GET /health`
 
@@ -110,8 +110,8 @@ the book's full printing list. When the ISBN's title is a *variant* in
 ISFDB (a reissue under another title or credit — Gollancz's SF Masterworks
 editions often are), the list covers the whole family: the parent title and
 its other variants **in the same language**, so translations stay out. 404
-with `"isbn found but not linked to a book-type title"` for anthologies,
-nonfiction and magazines, which have no book-type title.
+with `"isbn found but not linked to a book-type title"` for magazines,
+which have no book-type title.
 
 ### `GET /pubseries/{id}`
 
