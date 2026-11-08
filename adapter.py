@@ -15,6 +15,8 @@ Endpoints:
   GET /search?q=                  freetext title/author search
   GET /series/search?q=           freetext series-name search
   GET /series/{series_id}/volumes ordered per-volume list for a series
+  GET /pubseries/{id}             a publisher's line (ISFDB publication
+                                   series) and every printing in it
   GET /authors/search?q=          freetext author-name search
   GET /authors/{author_id}        full author profile + bibliography
   GET /health                     liveness/readiness
@@ -214,6 +216,16 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         prow = cur.fetchone()
         publisher = prow["publisher_name"] if prow else None
 
+    # The publisher's branded line this printing belongs to — ISFDB's
+    # *publication series* (The Women's Press Science Fiction, SF
+    # Masterworks), distinct from the title's story series above and from
+    # the publisher itself — with the printing's number in the line.
+    pub_series = None
+    if pub.get("pub_series_id"):
+        cur.execute("SELECT pub_series_name FROM pub_series WHERE pub_series_id = %s", (pub["pub_series_id"],))
+        srow = cur.fetchone()
+        pub_series = srow["pub_series_name"] if srow else None
+
     isbn = clean_isbn(pub.get("pub_isbn") or "")
     isbn10 = isbn13 = None
     if len(isbn) == 10:
@@ -249,6 +261,9 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         "_isfdb_title_id": (title_row or {}).get("title_id"),
         "_isfdb_series_id": (title_row or {}).get("series_id"),
         "_isfdb_series_num": (title_row or {}).get("title_seriesnum"),
+        "pub_series": pub_series or "",
+        "pub_series_num": (pub.get("pub_series_num") or "").strip(),
+        "_isfdb_pub_series_id": pub.get("pub_series_id") or None,
     }
 
 
@@ -543,6 +558,30 @@ def series_volumes(series_id: int):
                 "external_id": str(t["title_id"]),
             })
         return out
+
+
+@app.get("/pubseries/{pub_series_id}")
+def publication_series(pub_series_id: int):
+    """A publisher's line (ISFDB publication series) and every printing in
+    it, in line order — numbered ones by number, then the rest by date."""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pub_series_id, pub_series_name FROM pub_series WHERE pub_series_id = %s", (pub_series_id,))
+        series = cur.fetchone()
+        if not series:
+            raise HTTPException(status_code=404, detail="publication series not found")
+        cur.execute(
+            """
+            SELECT * FROM pubs WHERE pub_series_id = %s
+            ORDER BY (pub_series_num IS NULL OR pub_series_num = '') ASC,
+                     CAST(pub_series_num AS UNSIGNED) ASC, pub_series_num ASC, pub_year ASC
+            """,
+            (pub_series_id,),
+        )
+        return {
+            "id": series["pub_series_id"],
+            "name": series["pub_series_name"],
+            "publications": [book_result_from_pub(cur, pub) for pub in cur.fetchall()],
+        }
 
 
 @app.get("/authors/search")

@@ -113,6 +113,15 @@ its other variants **in the same language**, so translations stay out. 404
 with `"isbn found but not linked to a book-type title"` for anthologies,
 nonfiction and magazines, which have no book-type title.
 
+### `GET /pubseries/{id}`
+
+A publisher's branded line — ISFDB's *publication series* (The Women's
+Press Science Fiction, SF Masterworks), not the title's story series — and
+every printing in it, numbered ones in number order, then the rest by date:
+`{"id": 579, "name": "...", "publications": [ <same shape as /isbn> ]}`.
+Every printing result now also carries `pub_series`, `pub_series_num` and
+`_isfdb_pub_series_id` (empty / null when the printing isn't in a line).
+
 ### `GET /search?q=&limit=20&editions_per_title=10`
 
 Freetext title/author search. Title and author are matched independently
