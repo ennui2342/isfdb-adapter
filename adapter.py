@@ -305,6 +305,40 @@ def lookup_isbn(isbn: str, all: bool = False):
         return book_result_from_pub(cur, pub)
 
 
+def title_family(cur, title_ids):
+    """The given titles plus their variant family, in the same language.
+
+    ISFDB records a book reissued under a different title, author credit or
+    edition (Gollancz's SF Masterworks *The Lathe of Heaven*, title 1765551)
+    as a *variant* of a parent title (7661), and hangs each printing off
+    whichever of the two it carries. Following only the ISBN's own title
+    returned the 10 Masterworks printings and none of the parent's 39 — no
+    Avon or Panther paperbacks. So: each title's root (its parent, or
+    itself), then every book-type title under that root in the starting
+    title's language — a translation is a variant too, and an English ISBN
+    shouldn't bring back German printings (nor a German one English).
+    """
+    placeholders = ", ".join(["%s"] * len(title_ids))
+    cur.execute(
+        f"""
+        SELECT title_id, IF(title_parent > 0, title_parent, title_id) AS root, title_language
+        FROM titles WHERE title_id IN ({placeholders})
+        """,
+        title_ids,
+    )
+    family = set(title_ids)
+    for start in cur.fetchall():
+        cur.execute(
+            """
+            SELECT title_id FROM titles
+            WHERE (title_id = %s OR title_parent = %s) AND title_ttype IN %s AND title_language <=> %s
+            """,
+            (start["root"], start["root"], BOOK_TTYPES, start["title_language"]),
+        )
+        family.update(r["title_id"] for r in cur.fetchall())
+    return sorted(family)
+
+
 @app.get("/isbn/{isbn}/editions")
 def lookup_isbn_editions(isbn: str):
     """Given an ISBN, resolve it to its title(s) (a reused ISBN can
@@ -319,6 +353,9 @@ def lookup_isbn_editions(isbn: str):
     query /search already uses per matched title, just entered via a
     known ISBN instead of a fuzzy text match — exact and index-backed,
     not a FULLTEXT score to compute.
+
+    A variant title brings its family: the parent and its other
+    same-language variants (see title_family).
     """
     candidates = isbn_candidates(isbn)
     with db() as conn, conn.cursor() as cur:
@@ -341,6 +378,7 @@ def lookup_isbn_editions(isbn: str):
         if not title_ids:
             raise HTTPException(status_code=404, detail="isbn found but not linked to a book-type title")
 
+        title_ids = title_family(cur, title_ids)
         title_placeholders = ", ".join(["%s"] * len(title_ids))
         cur.execute(
             f"""

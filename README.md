@@ -103,6 +103,16 @@ endpoint returns *some* matching edition, not necessarily the one you meant
 — if you need a specific printing, use `/search` instead, which returns
 every edition separately, and pick the right one from title/publisher/year.
 
+### `GET /isbn/{isbn}/editions`
+
+Every publication of the same work as this ISBN, whatever their own ISBN —
+the book's full printing list. When the ISBN's title is a *variant* in
+ISFDB (a reissue under another title or credit — Gollancz's SF Masterworks
+editions often are), the list covers the whole family: the parent title and
+its other variants **in the same language**, so translations stay out. 404
+with `"isbn found but not linked to a book-type title"` for anthologies,
+nonfiction and magazines, which have no book-type title.
+
 ### `GET /search?q=&limit=20&editions_per_title=10`
 
 Freetext title/author search. Title and author are matched independently
