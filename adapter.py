@@ -555,10 +555,11 @@ def series_volumes(series_id: int):
     with db() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT title_id, title_title, title_seriesnum, title_copyright
-            FROM titles
-            WHERE series_id = %s AND title_ttype IN %s
-            ORDER BY title_seriesnum IS NULL, title_seriesnum ASC, title_copyright ASC
+            SELECT t.title_id, t.title_title, t.title_seriesnum, t.title_copyright, l.lang_code
+            FROM titles t
+            LEFT JOIN languages l ON l.lang_id = t.title_language
+            WHERE t.series_id = %s AND t.title_ttype IN %s
+            ORDER BY t.title_seriesnum IS NULL, t.title_seriesnum ASC, t.title_copyright ASC
             """,
             (series_id, BOOK_TTYPES),
         )
@@ -579,12 +580,25 @@ def series_volumes(series_id: int):
                 (t["title_id"],),
             )
             cover = cur.fetchone()
+            cur.execute(
+                """
+                SELECT a.author_canonical FROM canonical_author ca
+                JOIN authors a ON a.author_id = ca.author_id
+                WHERE ca.title_id = %s
+                """,
+                (t["title_id"],),
+            )
+            authors = [r["author_canonical"] for r in cur.fetchall()]
             out.append({
                 "position": float(t["title_seriesnum"]) if t["title_seriesnum"] is not None else 0.0,
                 "title": t["title_title"],
                 "release_date": date_str(t.get("title_copyright")),
                 "cover_url": (cover or {}).get("pub_frontimage") or "",
                 "external_id": str(t["title_id"]),
+                # Added 2026-11-08 for opsimath's series pages: a series can
+                # hold a translation's own omnibus (Le cycle de Tiamat).
+                "language": t.get("lang_code") or "",
+                "authors": authors,
             })
         return out
 
