@@ -215,3 +215,11 @@ its data — it's a volunteer-maintained wiki.
 AGPL-3.0 — see [LICENSE](LICENSE). If you run a modified version of this
 adapter as a network service, the AGPL requires you to make your modified
 source available to users of that service.
+
+### `GET /isbn/middle/{digits}`
+
+Printings whose ISBN-10 has the five `digits` as digits 5–9 (or the same
+in a 978 ISBN-13) — what a US mass-market paperback's 5-digit UPC add-on
+encodes; the UPC itself names only the publisher and cover price. All
+2,000 English-group prefixes (0000–1999) are tried through the ISBN index.
+`?limit=` (default 100).

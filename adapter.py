@@ -389,6 +389,34 @@ def title_family(cur, title_ids):
     return sorted(family)
 
 
+def isbn10_check_digit(first9: str) -> str:
+    total = sum((10 - i) * int(d) for i, d in enumerate(first9))
+    check = (11 - total % 11) % 11
+    return "X" if check == 10 else str(check)
+
+
+@app.get("/isbn/middle/{digits}")
+def isbns_with_middle(digits: str, limit: int = 100):
+    """Printings whose ISBN-10 has `digits` as digits 5-9: what a US
+    mass-market paperback's 5-digit UPC add-on encodes. (Its UPC itself
+    names only the publisher and cover price, shared by every book at that
+    price.) English-language ISBNs start with group 0 or 1, so there are
+    only 2,000 possible 4-digit prefixes: every complete ISBN-10 and its
+    978 ISBN-13 is built here and looked up through the pub_isbn index
+    (a pattern match on the middle digits would scan every row)."""
+    if not re.fullmatch(r"\d{5}", digits):
+        raise HTTPException(status_code=400, detail="five digits expected")
+    candidates = []
+    for prefix in range(2000):
+        first9 = f"{prefix:04d}{digits}"
+        isbn10 = first9 + isbn10_check_digit(first9)
+        candidates += [isbn10, isbn10_to_13(isbn10)]
+    with db() as conn, conn.cursor() as cur:
+        placeholders = ",".join(["%s"] * len(candidates))
+        cur.execute(f"SELECT * FROM pubs WHERE pub_isbn IN ({placeholders}) LIMIT %s", (*candidates, limit))
+        return [book_result_from_pub(cur, pub) for pub in cur.fetchall()]
+
+
 @app.get("/isbn/{isbn}/editions")
 def lookup_isbn_editions(isbn: str):
     """Given an ISBN, resolve it to its title(s) (a reused ISBN can
