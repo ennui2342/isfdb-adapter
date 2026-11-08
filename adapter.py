@@ -147,6 +147,24 @@ def parse_page_count(pub_pages: str | None) -> int | None:
     return int(m.group(0)) if m else None
 
 
+NO_TABLE = 1146  # MariaDB ER_NO_SUCH_TABLE
+
+
+def pub_series_name(cur, pub_series_id):
+    """A publication series' name — or None when the mirror predates
+    importing the pub_series table (refresh.py's WANTED_TABLES gained it
+    2026-11-08): a deploy that lands before the next re-import must not
+    break every result (it 503'd /search once)."""
+    try:
+        cur.execute("SELECT pub_series_name FROM pub_series WHERE pub_series_id = %s", (pub_series_id,))
+    except pymysql.err.ProgrammingError as e:
+        if e.args and e.args[0] == NO_TABLE:
+            return None
+        raise
+    row = cur.fetchone()
+    return row["pub_series_name"] if row else None
+
+
 def book_result_from_pub(cur, pub: dict) -> dict:
     """Build a BookResult-shaped dict from a pubs row (+ its title/authors)."""
     cur.execute(
@@ -220,11 +238,7 @@ def book_result_from_pub(cur, pub: dict) -> dict:
     # *publication series* (The Women's Press Science Fiction, SF
     # Masterworks), distinct from the title's story series above and from
     # the publisher itself — with the printing's number in the line.
-    pub_series = None
-    if pub.get("pub_series_id"):
-        cur.execute("SELECT pub_series_name FROM pub_series WHERE pub_series_id = %s", (pub["pub_series_id"],))
-        srow = cur.fetchone()
-        pub_series = srow["pub_series_name"] if srow else None
+    pub_series = pub_series_name(cur, pub.get("pub_series_id")) if pub.get("pub_series_id") else None
 
     isbn = clean_isbn(pub.get("pub_isbn") or "")
     isbn10 = isbn13 = None
@@ -565,7 +579,12 @@ def publication_series(pub_series_id: int):
     """A publisher's line (ISFDB publication series) and every printing in
     it, in line order — numbered ones by number, then the rest by date."""
     with db() as conn, conn.cursor() as cur:
-        cur.execute("SELECT pub_series_id, pub_series_name FROM pub_series WHERE pub_series_id = %s", (pub_series_id,))
+        try:
+            cur.execute("SELECT pub_series_id, pub_series_name FROM pub_series WHERE pub_series_id = %s", (pub_series_id,))
+        except pymysql.err.ProgrammingError as e:
+            if e.args and e.args[0] == NO_TABLE:
+                raise HTTPException(status_code=503, detail="publication series not imported yet — awaiting the next mirror refresh")
+            raise
         series = cur.fetchone()
         if not series:
             raise HTTPException(status_code=404, detail="publication series not found")

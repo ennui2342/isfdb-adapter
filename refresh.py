@@ -75,8 +75,8 @@ MIN_PUBS = 200_000
 # saves time, since writing the rows is the expensive part.
 WANTED_TABLES = frozenset({
     "authors", "canonical_author", "languages", "notes", "pseudonyms",
-    "pub_authors", "pub_content", "publishers", "pubs", "series", "titles",
-})
+    "pub_authors", "pub_content", "pub_series", "publishers", "pubs", "series", "titles",
+})  # pub_series: publication series names (publishers' lines) — 2026-11-08
 
 
 def notify_discord(title: str, fields: dict, level: str = "info") -> None:
