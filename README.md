@@ -121,6 +121,9 @@ every printing in it, numbered ones in number order, then the rest by date:
 `{"id": 579, "name": "...", "publications": [ <same shape as /isbn> ]}`.
 Every printing result now also carries `pub_series`, `pub_series_num` and
 `_isfdb_pub_series_id` (empty / null when the printing isn't in a line).
+It also names the title's story series: `series` (The Snow Queen Cycle)
+beside `_isfdb_series_id` and `_isfdb_series_num` (empty / null when the
+title isn't in one).
 
 ### `GET /search?q=&limit=20&editions_per_title=10`
 

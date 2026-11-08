@@ -245,6 +245,15 @@ def book_result_from_pub(cur, pub: dict) -> dict:
     # the publisher itself — with the printing's number in the line.
     pub_series = pub_series_name(cur, pub.get("pub_series_id")) if pub.get("pub_series_id") else None
 
+    # The title's story series by name (The Snow Queen Cycle), beside its
+    # id and number below — so a consumer can file the book in the series
+    # without a further call.
+    series_name = None
+    if title_row and title_row.get("series_id"):
+        cur.execute("SELECT series_title FROM series WHERE series_id = %s", (title_row["series_id"],))
+        srow = cur.fetchone()
+        series_name = srow["series_title"] if srow else None
+
     isbn = clean_isbn(pub.get("pub_isbn") or "")
     isbn10 = isbn13 = None
     if len(isbn) == 10:
@@ -280,6 +289,7 @@ def book_result_from_pub(cur, pub: dict) -> dict:
         "_isfdb_title_id": (title_row or {}).get("title_id"),
         "_isfdb_series_id": (title_row or {}).get("series_id"),
         "_isfdb_series_num": (title_row or {}).get("title_seriesnum"),
+        "series": series_name or "",
         "pub_series": pub_series or "",
         "pub_series_num": (pub.get("pub_series_num") or "").strip(),
         "_isfdb_pub_series_id": pub.get("pub_series_id") or None,
