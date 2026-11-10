@@ -223,3 +223,11 @@ in a 978 ISBN-13) — what a US mass-market paperback's 5-digit UPC add-on
 encodes; the UPC itself names only the publisher and cover price. All
 2,000 English-group prefixes (0000–1999) are tried through the ISBN index.
 `?limit=` (default 100).
+
+### `GET /titles/{id}`
+
+A title's main (parent) title — ISFDB's canonical one, generally the title
+of first publication — and every variant of it (retitlings, other
+credits, translations, each with its language): `{id, title, type, main:
+{id, title, language}, variants: [{id, title, language}]}`. 404 if no such
+title.

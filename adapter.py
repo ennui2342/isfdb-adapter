@@ -637,6 +637,41 @@ def series_volumes(series_id: int):
         return out
 
 
+@app.get("/titles/{title_id}")
+def fetch_title(title_id: int):
+    """A title's main title and every variant of it — the main (parent)
+    title is ISFDB's canonical one, generally the title of first
+    publication; variants are later retitlings, other credits and
+    translations. Lets a consumer tell a book known by another title (Extro
+    is a variant of The Computer Connection) from one linked to the wrong
+    record."""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT title_id, title_title, title_parent, title_ttype FROM titles WHERE title_id = %s", (title_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="title not found")
+        main_id = row["title_parent"] or row["title_id"]
+        cur.execute(
+            """
+            SELECT t.title_id, t.title_title, t.title_ttype, l.lang_code
+            FROM titles t LEFT JOIN languages l ON l.lang_id = t.title_language
+            WHERE t.title_id = %s OR t.title_parent = %s
+            """,
+            (main_id, main_id),
+        )
+        rows = cur.fetchall()
+        main = next((r for r in rows if r["title_id"] == main_id), None)
+        return {
+            "id": title_id,
+            "title": row["title_title"],
+            "type": row["title_ttype"],
+            "main": {"id": main_id, "title": (main or {}).get("title_title") or row["title_title"],
+                     "language": (main or {}).get("lang_code") or ""},
+            "variants": [{"id": r["title_id"], "title": r["title_title"], "language": r.get("lang_code") or ""}
+                         for r in rows if r["title_id"] != main_id],
+        }
+
+
 @app.get("/pubseries/{pub_series_id}")
 def publication_series(pub_series_id: int):
     """A publisher's line (ISFDB publication series) and every printing in
