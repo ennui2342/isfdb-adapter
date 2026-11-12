@@ -231,3 +231,9 @@ of first publication — and every variant of it (retitlings, other
 credits, translations, each with its language): `{id, title, type, main:
 {id, title, language}, variants: [{id, title, language}]}`. 404 if no such
 title.
+
+### `GET /titles/{id}/editions`
+
+Every publication of the title and its same-language variant family, as
+`/isbn/{isbn}/editions` returns them — entered by title id rather than an
+ISBN that may belong to another title. 404 if no such title.

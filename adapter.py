@@ -471,6 +471,32 @@ def lookup_isbn_editions(isbn: str):
         return [book_result_from_pub(cur, pub) for pub in pubs]
 
 
+@app.get("/titles/{title_id}/editions")
+def title_editions(title_id: int):
+    """Every publication of a title and its same-language variant family
+    (title_family) — /isbn/{isbn}/editions entered by a known title id
+    instead of an ISBN. A consumer that already knows which title a book is
+    needs this: the only ISBN it has can belong to a different title (The
+    Midwich Cuckoos' only ISBN was a schools chapbook's, title 172997, so
+    the novel's printings, title 7701, were never listed)."""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT title_id FROM titles WHERE title_id = %s", (title_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="title not found")
+        title_ids = title_family(cur, [title_id])
+        placeholders = ", ".join(["%s"] * len(title_ids))
+        cur.execute(
+            f"""
+            SELECT DISTINCT p.* FROM pub_content pc
+            JOIN pubs p ON p.pub_id = pc.pub_id
+            WHERE pc.title_id IN ({placeholders})
+            ORDER BY (p.pub_year IS NULL OR p.pub_year IN ('0000-00-00', '8888-00-00')) ASC, p.pub_year ASC
+            """,
+            title_ids,
+        )
+        return [book_result_from_pub(cur, pub) for pub in cur.fetchall()]
+
+
 @app.get("/search")
 def search_books(q: str, limit: int = 20, editions_per_title: int = 10):
     """Title/author freetext search.
