@@ -172,15 +172,21 @@ def pub_series_name(cur, pub_series_id):
 
 def book_result_from_pub(cur, pub: dict) -> dict:
     """Build a BookResult-shaped dict from a pubs row (+ its title/authors)."""
+    # The publication's own title: an omnibus printing's contents are the
+    # OMNIBUS title and each novel in it, all book-length, so the title of
+    # the printing's own type (pub_ctype) comes first — before 2026-11-13
+    # this took whichever came back first, and Live Robots' printing was
+    # credited to Wetware, one of the two novels in it.
     cur.execute(
         """
         SELECT t.title_id, t.title_title, t.title_language, t.series_id, t.title_seriesnum
         FROM pub_content pc
         JOIN titles t ON t.title_id = pc.title_id
         WHERE pc.pub_id = %s AND t.title_ttype IN %s
+        ORDER BY t.title_ttype = %s DESC, t.title_id
         LIMIT 1
         """,
-        (pub["pub_id"], BOOK_TTYPES),
+        (pub["pub_id"], BOOK_TTYPES, pub.get("pub_ctype") or ""),
     )
     title_row = cur.fetchone()
 
