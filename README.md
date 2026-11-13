@@ -237,3 +237,13 @@ title.
 Every publication of the title and its same-language variant family, as
 `/isbn/{isbn}/editions` returns them — entered by title id rather than an
 ISBN that may belong to another title. 404 if no such title.
+
+### `GET /isbn/addon/{digits}`
+
+Printings a US mass-market paperback's 5-digit UPC add-on can identify.
+Publishers use one of two conventions: ISBN-10 digits 5–9 (Tor:
+0-8125-5010-2 → 55010), or the ISBN's title part zero-padded (DAW:
+0-88677-299-0 → 00299), its length fixed by the publisher code's ISBN
+range. Both sets of candidate ISBNs (ISBN-10 and 978 ISBN-13) are looked up
+through the pub_isbn index, in chunks. Supersedes `/isbn/middle`.
+`?limit=` (default 100).

@@ -417,6 +417,57 @@ def isbns_with_middle(digits: str, limit: int = 100):
         return [book_result_from_pub(cur, pub) for pub in cur.fetchall()]
 
 
+# English-group ISBN-10 publisher ranges (group digit, low, high, code
+# length): a publisher's code length is fixed by its range, so the title
+# part is what's left of the nine digits.
+ENGLISH_PUBLISHER_RANGES = [
+    ("0", 200, 699, 3), ("0", 7000, 8499, 4), ("0", 85000, 89999, 5),
+    ("1", 100, 399, 3), ("1", 4000, 5499, 4),
+]
+
+
+def addon_isbn10s(digits: str) -> list[str]:
+    """Every ISBN-10 a US mass-market UPC add-on can stand for. Publishers
+    use one of two conventions: the add-on is ISBN digits 5-9 (Tor,
+    0-8125-5010-2: 55010), or the ISBN's title part zero-padded to five
+    digits (DAW, 0-88677-299-0: 00299) — the title part's length fixed by
+    the publisher code's range."""
+    out = []
+    for prefix in range(2000):  # digits 5-9, any English-group 4-digit start
+        first9 = f"{prefix:04d}{digits}"
+        out.append(first9 + isbn10_check_digit(first9))
+    for group, low, high, code_len in ENGLISH_PUBLISHER_RANGES:
+        title_len = 9 - 1 - code_len
+        if title_len > 5 or digits[: 5 - title_len].strip("0"):
+            continue
+        title = digits[5 - title_len:]
+        for code in range(low, high + 1):
+            first9 = f"{group}{code:0{code_len}d}{title}"
+            out.append(first9 + isbn10_check_digit(first9))
+    return list(dict.fromkeys(out))
+
+
+@app.get("/isbn/addon/{digits}")
+def isbns_for_addon(digits: str, limit: int = 100):
+    """Printings a US mass-market UPC add-on can identify (addon_isbn10s),
+    looked up through the pub_isbn index — supersedes /isbn/middle, which
+    assumed a 3-digit publisher code."""
+    if not re.fullmatch(r"\d{5}", digits):
+        raise HTTPException(status_code=400, detail="five digits expected")
+    isbn10s = addon_isbn10s(digits)
+    candidates = isbn10s + [isbn10_to_13(i) for i in isbn10s]
+    with db() as conn, conn.cursor() as cur:
+        rows = []
+        for i in range(0, len(candidates), 5000):
+            chunk = candidates[i : i + 5000]
+            placeholders = ",".join(["%s"] * len(chunk))
+            cur.execute(f"SELECT * FROM pubs WHERE pub_isbn IN ({placeholders})", chunk)
+            rows += cur.fetchall()
+            if len(rows) >= limit:
+                break
+        return [book_result_from_pub(cur, pub) for pub in rows[:limit]]
+
+
 @app.get("/isbn/{isbn}/editions")
 def lookup_isbn_editions(isbn: str):
     """Given an ISBN, resolve it to its title(s) (a reused ISBN can
