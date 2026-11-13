@@ -177,7 +177,10 @@ pseudonym cross-references, and a bibliography with one representative
 edition's ISBN/cover per work. `?works=false` returns `"works": []` and
 skips the bibliography, which costs one query per title (~27s for a
 prolific author) — for callers that only need the profile, e.g. the
-living/dead check.
+living/dead check. `pseudonyms` are the other names this author's work
+appears under (Catherine Webb: Claire North, Kate Griffin);
+`pseudonym_of` the authors this name belongs to (Claire North: Catherine
+Webb; James S. A. Corey: Daniel Abraham, Ty Franck).
 
 ```json
 {
@@ -186,6 +189,8 @@ living/dead check.
   "born_date": "1920-10-08", "died_date": "1986-02-11",
   "nationality": "", "photo_url": "",
   "pseudonym_ids": [],
+  "pseudonyms": [{"id": "…", "name": "…"}],
+  "pseudonym_of": [{"id": "…", "name": "…"}],
   "works": [{"title": "Dune", "isbn_13": "...", "isbn_10": "...", "publish_year": 1965, "cover_url": "..."}]
 }
 ```

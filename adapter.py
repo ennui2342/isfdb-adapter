@@ -852,10 +852,20 @@ def fetch_author(author_id: int, works: bool = True):
             bio = (note or {}).get("note_note") or ""
 
         cur.execute(
-            "SELECT pseudonym FROM pseudonyms WHERE author_id = %s",
+            "SELECT a.author_id, a.author_canonical FROM pseudonyms p JOIN authors a ON a.author_id = p.pseudonym"
+            " WHERE p.author_id = %s ORDER BY a.author_canonical",
             (author_id,),
         )
-        pseudonym_ids = [r["pseudonym"] for r in cur.fetchall()]
+        pseudonyms = cur.fetchall()
+        pseudonym_ids = [r["author_id"] for r in pseudonyms]
+        # The other way (added 2026-11-13 for opsimath's author pages): whose
+        # name this is — Claire North is a pseudonym of Catherine Webb.
+        cur.execute(
+            "SELECT a.author_id, a.author_canonical FROM pseudonyms p JOIN authors a ON a.author_id = p.author_id"
+            " WHERE p.pseudonym = %s ORDER BY a.author_canonical",
+            (author_id,),
+        )
+        pseudonym_of = cur.fetchall()
 
         titles = []
         if works:
@@ -919,6 +929,8 @@ def fetch_author(author_id: int, works: bool = True):
             "nationality": "",
             "photo_url": author.get("author_image") or "",
             "pseudonym_ids": [str(p) for p in pseudonym_ids],
+            "pseudonyms": [{"id": str(r["author_id"]), "name": r["author_canonical"]} for r in pseudonyms],
+            "pseudonym_of": [{"id": str(r["author_id"]), "name": r["author_canonical"]} for r in pseudonym_of],
             "works": works_out,
         }
 
