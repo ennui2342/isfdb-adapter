@@ -730,7 +730,7 @@ def fetch_title(title_id: int):
         main_id = row["title_parent"] or row["title_id"]
         cur.execute(
             """
-            SELECT t.title_id, t.title_title, t.title_ttype, l.lang_code
+            SELECT t.title_id, t.title_title, t.title_ttype, t.title_copyright, t.title_storylen, l.lang_code
             FROM titles t LEFT JOIN languages l ON l.lang_id = t.title_language
             WHERE t.title_id = %s OR t.title_parent = %s
             """,
@@ -742,8 +742,14 @@ def fetch_title(title_id: int):
             "id": title_id,
             "title": row["title_title"],
             "type": row["title_ttype"],
+            # The main title's type, first-publication year and language
+            # (added 2026-11-13: opsimath syncs a book's form, year and
+            # original language from them).
             "main": {"id": main_id, "title": (main or {}).get("title_title") or row["title_title"],
-                     "language": (main or {}).get("lang_code") or ""},
+                     "language": (main or {}).get("lang_code") or "",
+                     "type": (main or {}).get("title_ttype") or row["title_ttype"],
+                     "year": date_year((main or {}).get("title_copyright")),
+                     "length": (main or {}).get("title_storylen") or ""},
             "variants": [{"id": r["title_id"], "title": r["title_title"], "language": r.get("lang_code") or ""}
                          for r in rows if r["title_id"] != main_id],
         }
