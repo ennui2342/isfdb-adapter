@@ -738,6 +738,33 @@ def fetch_title(title_id: int):
         )
         rows = cur.fetchall()
         main = next((r for r in rows if r["title_id"] == main_id), None)
+        # Who wrote it (added 2026-11-13: opsimath checks a book's authors
+        # against them): the main title's credited authors (ca_status 1 —
+        # not a review's or interview's subject), and the names its variants
+        # are credited under that aren't one of those — pseudonyms, house
+        # names, misprints — each with the main authors it's a pseudonym of.
+        def credits(title_ids):
+            if not title_ids:
+                return []
+            cur.execute(
+                f"""
+                SELECT DISTINCT a.author_id, a.author_canonical FROM canonical_author ca
+                JOIN authors a ON a.author_id = ca.author_id
+                WHERE ca.ca_status = 1 AND ca.title_id IN ({", ".join(["%s"] * len(title_ids))})
+                """,
+                tuple(title_ids),
+            )
+            return cur.fetchall()
+
+        authors = credits([main_id])
+        author_ids = {a["author_id"] for a in authors}
+        aliases = []
+        for a in credits([r["title_id"] for r in rows if r["title_id"] != main_id]):
+            if a["author_id"] in author_ids:
+                continue
+            cur.execute("SELECT author_id FROM pseudonyms WHERE pseudonym = %s", (a["author_id"],))
+            of = [r["author_id"] for r in cur.fetchall() if r["author_id"] in author_ids]
+            aliases.append({"id": str(a["author_id"]), "name": a["author_canonical"], "of": [str(i) for i in of]})
         return {
             "id": title_id,
             "title": row["title_title"],
@@ -749,7 +776,9 @@ def fetch_title(title_id: int):
                      "language": (main or {}).get("lang_code") or "",
                      "type": (main or {}).get("title_ttype") or row["title_ttype"],
                      "year": date_year((main or {}).get("title_copyright")),
-                     "length": (main or {}).get("title_storylen") or ""},
+                     "length": (main or {}).get("title_storylen") or "",
+                     "authors": [{"id": str(a["author_id"]), "name": a["author_canonical"]} for a in authors],
+                     "author_aliases": aliases},
             "variants": [{"id": r["title_id"], "title": r["title_title"], "language": r.get("lang_code") or ""}
                          for r in rows if r["title_id"] != main_id],
         }

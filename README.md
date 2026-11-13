@@ -229,8 +229,12 @@ encodes; the UPC itself names only the publisher and cover price. All
 A title's main (parent) title — ISFDB's canonical one, generally the title
 of first publication — and every variant of it (retitlings, other
 credits, translations, each with its language): `{id, title, type, main:
-{id, title, language}, variants: [{id, title, language}]}`. 404 if no such
-title.
+{id, title, language, type, year, length, authors: [{id, name}],
+author_aliases: [{id, name, of: [author id]}]}, variants: [{id, title,
+language}]}`. `authors` are the main title's credited authors;
+`author_aliases` the other names its variants are credited under
+(pseudonyms, misprints), each with the main authors it's a pseudonym of.
+404 if no such title.
 
 ### `GET /titles/{id}/editions`
 
