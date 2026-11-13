@@ -765,6 +765,9 @@ def fetch_title(title_id: int):
             cur.execute("SELECT author_id FROM pseudonyms WHERE pseudonym = %s", (a["author_id"],))
             of = [r["author_id"] for r in cur.fetchall() if r["author_id"] in author_ids]
             aliases.append({"id": str(a["author_id"]), "name": a["author_canonical"], "of": [str(i) for i in of]})
+        # Its awards — won or shortlisted, under any of its titles (added
+        # 2026-11-13: opsimath's book-page badges).
+        awards = title_awards(cur, [r["title_id"] for r in rows])
         return {
             "id": title_id,
             "title": row["title_title"],
@@ -778,10 +781,127 @@ def fetch_title(title_id: int):
                      "year": date_year((main or {}).get("title_copyright")),
                      "length": (main or {}).get("title_storylen") or "",
                      "authors": [{"id": str(a["author_id"]), "name": a["author_canonical"]} for a in authors],
-                     "author_aliases": aliases},
+                     "author_aliases": aliases,
+                     "awards": awards},
             "variants": [{"id": r["title_id"], "title": r["title_title"], "language": r.get("lang_code") or ""}
                          for r in rows if r["title_id"] != main_id],
         }
+
+
+def title_awards(cur, ids):
+    """Awards won or shortlisted under any of `ids` — [] before the mirror
+    has the award tables (a refresh after 2026-11-13 loads them)."""
+    try:
+        cur.execute(
+            f"""
+            SELECT a.award_year, a.award_level, c.award_cat_id, c.award_cat_name, t.award_type_id, t.award_type_name
+            FROM title_awards ta
+            JOIN awards a ON a.award_id = ta.award_id
+            JOIN award_cats c ON c.award_cat_id = a.award_cat_id
+            JOIN award_types t ON t.award_type_id = a.award_type_id
+            WHERE ta.title_id IN ({", ".join(["%s"] * len(ids))})
+            ORDER BY a.award_year
+            """,
+            tuple(ids),
+        )
+    except pymysql.err.ProgrammingError:
+        return []
+    return [{"award": r["award_type_name"], "award_id": str(r["award_type_id"]), "category": r["award_cat_name"],
+             "category_id": str(r["award_cat_id"]), "year": date_year(r.get("award_year")),
+             "status": award_level_status(r.get("award_level"))}
+            for r in cur.fetchall() if award_level_status(r.get("award_level"))]
+
+
+# --- Awards (added 2026-11-13 for opsimath's reading lists) -------------
+# ISFDB's award_level: 1 is the winner; 2-70 the other nominees, in
+# finishing order where known; 71 and up are notes ("No award", "withdrawn",
+# "not on ballot") rather than shortlist places.
+SHORTLIST_MAX_LEVEL = 70
+
+
+def award_level_status(level) -> str | None:
+    try:
+        n = int(level)
+    except (TypeError, ValueError):
+        return None
+    if n == 1:
+        return "winner"
+    if 2 <= n <= SHORTLIST_MAX_LEVEL:
+        return "shortlisted"
+    return None
+
+
+@app.get("/awards")
+def award_types():
+    """Every award ISFDB records, with its categories: [{id, code, name,
+    short_name, poll, non_genre, categories: [{id, name, entries}]}]."""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM award_types ORDER BY award_type_name")
+        types = cur.fetchall()
+        cur.execute(
+            """
+            SELECT c.award_cat_id, c.award_cat_name, c.award_cat_type_id, c.award_cat_order, COUNT(a.award_id) AS entries
+            FROM award_cats c LEFT JOIN awards a ON a.award_cat_id = c.award_cat_id
+            GROUP BY c.award_cat_id, c.award_cat_name, c.award_cat_type_id, c.award_cat_order
+            """
+        )
+        cats = {}
+        for c in cur.fetchall():
+            cats.setdefault(c["award_cat_type_id"], []).append(c)
+        return [{
+            "id": str(t["award_type_id"]),
+            "code": t.get("award_type_code") or "",
+            "name": t["award_type_name"],
+            "short_name": t.get("award_type_short_name") or "",
+            "poll": (t.get("award_type_poll") or "") == "Yes",
+            "non_genre": (t.get("award_type_non_genre") or "") == "Yes",
+            "categories": [{"id": str(c["award_cat_id"]), "name": c["award_cat_name"], "entries": c["entries"]}
+                           for c in sorted(cats.get(t["award_type_id"], []), key=lambda c: (c["award_cat_order"] or 999, c["award_cat_name"]))],
+        } for t in types]
+
+
+@app.get("/awards/categories/{cat_id}")
+def award_category(cat_id: int):
+    """One award category's entries, every year: {id, name, award: {id,
+    name}, entries: [{year, level, status (winner | shortlisted | null),
+    title, author, title_id, main_title_id, type}]} — title_id null when
+    ISFDB doesn't link the entry to a title (a film, a person)."""
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.award_cat_id, c.award_cat_name, t.award_type_id, t.award_type_name
+            FROM award_cats c JOIN award_types t ON t.award_type_id = c.award_cat_type_id
+            WHERE c.award_cat_id = %s
+            """,
+            (cat_id,),
+        )
+        cat = cur.fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="award category not found")
+        cur.execute(
+            """
+            SELECT a.award_id, a.award_title, a.award_author, a.award_year, a.award_level,
+                   ta.title_id, t.title_parent, t.title_ttype
+            FROM awards a
+            LEFT JOIN title_awards ta ON ta.award_id = a.award_id
+            LEFT JOIN titles t ON t.title_id = ta.title_id
+            WHERE a.award_cat_id = %s
+            ORDER BY a.award_year, CAST(a.award_level AS UNSIGNED), a.award_id
+            """,
+            (cat_id,),
+        )
+        entries = [{
+            "year": date_year(r.get("award_year")),
+            "level": str(r.get("award_level") or ""),
+            "status": award_level_status(r.get("award_level")),
+            "title": r.get("award_title") or "",
+            "author": r.get("award_author") or "",
+            "title_id": r.get("title_id"),
+            "main_title_id": (r.get("title_parent") or r.get("title_id")) or None,
+            "type": r.get("title_ttype") or "",
+        } for r in cur.fetchall()]
+        return {"id": str(cat["award_cat_id"]), "name": cat["award_cat_name"],
+                "award": {"id": str(cat["award_type_id"]), "name": cat["award_type_name"]}, "entries": entries}
 
 
 @app.get("/pubseries/{pub_series_id}")

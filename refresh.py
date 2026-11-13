@@ -76,7 +76,10 @@ MIN_PUBS = 200_000
 WANTED_TABLES = frozenset({
     "authors", "canonical_author", "languages", "notes", "pseudonyms",
     "pub_authors", "pub_content", "pub_series", "publishers", "pubs", "series", "titles",
-})  # pub_series: publication series names (publishers' lines) — 2026-11-08
+    "awards", "award_types", "award_cats", "title_awards",
+})  # pub_series: publication series names (publishers' lines) — 2026-11-08;
+# awards, award_types, award_cats, title_awards: award winners and
+# shortlists (opsimath's reading lists) — 2026-11-13
 
 
 def notify_discord(title: str, fields: dict, level: str = "info") -> None:

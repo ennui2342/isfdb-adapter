@@ -239,6 +239,8 @@ author_aliases: [{id, name, of: [author id]}]}, variants: [{id, title,
 language}]}`. `authors` are the main title's credited authors;
 `author_aliases` the other names its variants are credited under
 (pseudonyms, misprints), each with the main authors it's a pseudonym of.
+`main.awards` lists the awards it won or was shortlisted for under any of
+its titles: `[{award, award_id, category, category_id, year, status}]`.
 404 if no such title.
 
 ### `GET /titles/{id}/editions`
@@ -256,3 +258,16 @@ Publishers use one of two conventions: ISBN-10 digits 5–9 (Tor:
 range. Both sets of candidate ISBNs (ISBN-10 and 978 ISBN-13) are looked up
 through the pub_isbn index, in chunks. Supersedes `/isbn/middle`.
 `?limit=` (default 100).
+
+### `GET /awards`
+
+Every award ISFDB records with its categories: `[{id, code, name,
+short_name, poll, non_genre, categories: [{id, name, entries}]}]`.
+
+### `GET /awards/categories/{id}`
+
+One award category's entries over every year: `{id, name, award: {id,
+name}, entries: [{year, level, status, title, author, title_id,
+main_title_id, type}]}`. `status` is `winner` (ISFDB award_level 1),
+`shortlisted` (2–70) or null (71+: "no award", withdrawn, not on ballot).
+`title_id` is null when ISFDB doesn't link the entry to a title.
