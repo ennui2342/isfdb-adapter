@@ -2,7 +2,7 @@
 #   default command → adapter.py (long-running HTTP query API)
 #   command override → refresh.py (weekly login/scrape/download/import;
 #   see docker-compose.yml's `refresh` service or run it via cron/CronJob)
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends mariadb-client && \
