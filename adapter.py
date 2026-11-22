@@ -170,41 +170,111 @@ def pub_series_name(cur, pub_series_id):
     return row["pub_series_name"] if row else None
 
 
-def book_result_from_pub(cur, pub: dict) -> dict:
-    """Build a BookResult-shaped dict from a pubs row (+ its title/authors)."""
+def cached(cache: dict | None, key, fetch):
+    """fetch() once per key within one request (`cache` is that request's
+    dict; None: no caching). A search returns hundreds of printings, most
+    sharing a title, publisher and language — each looked up once rather
+    than once per printing (/search took 5-20s, over opsimath's limit,
+    2026-11-22)."""
+    if cache is None:
+        return fetch()
+    if key not in cache:
+        cache[key] = fetch()
+    return cache[key]
+
+
+def book_results(cur, pubs) -> list[dict]:
+    """Printings as BookResults, sharing one lookup cache."""
+    pubs = list(pubs)
+    cache: dict = {}
+    prefetch(cur, pubs, cache)
+    return [book_result_from_pub(cur, pub, cache) for pub in pubs]
+
+
+def prefetch(cur, pubs: list[dict], cache: dict):
+    """Each printing's own title and cover artists, for all of them in two
+    queries rather than two per printing — into `cache`, where
+    book_result_from_pub looks first."""
+    ids = [p["pub_id"] for p in pubs]
+    if not ids:
+        return
+    ctype = {p["pub_id"]: p.get("pub_ctype") or "" for p in pubs}
+    cur.execute(
+        """
+        SELECT pc.pub_id, t.title_id, t.title_title, t.title_language, t.series_id, t.title_seriesnum, t.title_ttype
+        FROM pub_content pc
+        JOIN titles t ON t.title_id = pc.title_id
+        WHERE pc.pub_id IN %s AND t.title_ttype IN %s
+        """,
+        (ids, BOOK_TTYPES),
+    )
+    rows: dict = {}
+    for r in cur.fetchall():
+        rows.setdefault(r["pub_id"], []).append(r)
+    for pid in ids:
+        # as book_result_from_pub's own query: the title of the printing's
+        # own type first, then the lowest id
+        found = sorted(rows.get(pid, []), key=lambda r: (r["title_ttype"] != ctype[pid], r["title_id"]))
+        cache[("title_row", pid)] = ({k: found[0][k] for k in ("title_id", "title_title", "title_language", "series_id", "title_seriesnum")}
+                                     if found else None)
+    cur.execute(
+        """
+        SELECT pc.pub_id, a.author_canonical
+        FROM pub_content pc
+        JOIN titles t ON t.title_id = pc.title_id
+        JOIN canonical_author ca ON ca.title_id = t.title_id
+        JOIN authors a ON a.author_id = ca.author_id
+        WHERE pc.pub_id IN %s AND t.title_ttype = 'COVERART'
+        """,
+        (ids,),
+    )
+    artists: dict = {pid: [] for pid in ids}
+    for r in cur.fetchall():
+        artists[r["pub_id"]].append(r["author_canonical"])
+    for pid in ids:
+        cache[("cover_artists", pid)] = artists[pid]
+
+
+def book_result_from_pub(cur, pub: dict, cache: dict | None = None) -> dict:
+    """Build a BookResult-shaped dict from a pubs row (+ its title/authors).
+    Pass one `cache` dict across the printings of one response."""
     # The publication's own title: an omnibus printing's contents are the
     # OMNIBUS title and each novel in it, all book-length, so the title of
     # the printing's own type (pub_ctype) comes first — before 2026-11-13
     # this took whichever came back first, and Live Robots' printing was
     # credited to Wetware, one of the two novels in it.
-    cur.execute(
-        """
-        SELECT t.title_id, t.title_title, t.title_language, t.series_id, t.title_seriesnum
-        FROM pub_content pc
-        JOIN titles t ON t.title_id = pc.title_id
-        WHERE pc.pub_id = %s AND t.title_ttype IN %s
-        ORDER BY t.title_ttype = %s DESC, t.title_id
-        LIMIT 1
-        """,
-        (pub["pub_id"], BOOK_TTYPES, pub.get("pub_ctype") or ""),
-    )
-    title_row = cur.fetchone()
+    def own_title():
+        cur.execute(
+            """
+            SELECT t.title_id, t.title_title, t.title_language, t.series_id, t.title_seriesnum
+            FROM pub_content pc
+            JOIN titles t ON t.title_id = pc.title_id
+            WHERE pc.pub_id = %s AND t.title_ttype IN %s
+            ORDER BY t.title_ttype = %s DESC, t.title_id
+            LIMIT 1
+            """,
+            (pub["pub_id"], BOOK_TTYPES, pub.get("pub_ctype") or ""),
+        )
+        return cur.fetchone()
+    title_row = cached(cache, ("title_row", pub["pub_id"]), own_title)
 
     # Authors with their ISFDB ids (parallel lists), so a consumer can tie
     # its own author records to ISFDB's through the books, not by name.
     authors: list[str] = []
     author_ids: list[int] = []
     if title_row:
-        cur.execute(
-            """
-            SELECT a.author_id, a.author_canonical
-            FROM canonical_author ca
-            JOIN authors a ON a.author_id = ca.author_id
-            WHERE ca.title_id = %s
-            """,
-            (title_row["title_id"],),
-        )
-        rows = cur.fetchall()
+        def title_authors():
+            cur.execute(
+                """
+                SELECT a.author_id, a.author_canonical
+                FROM canonical_author ca
+                JOIN authors a ON a.author_id = ca.author_id
+                WHERE ca.title_id = %s
+                """,
+                (title_row["title_id"],),
+            )
+            return cur.fetchall()
+        rows = cached(cache, ("title_authors", title_row["title_id"]), title_authors)
         authors, author_ids = [r["author_canonical"] for r in rows], [r["author_id"] for r in rows]
     if not authors:
         cur.execute(
@@ -225,45 +295,54 @@ def book_result_from_pub(cur, pub: dict) -> dict:
     # pub_content, with its own canonical_author(s) — a printing can be
     # re-illustrated on reissue while the underlying NOVEL title (and its
     # authors, above) stays the same.
-    cur.execute(
-        """
-        SELECT a.author_canonical
-        FROM pub_content pc
-        JOIN titles t ON t.title_id = pc.title_id
-        JOIN canonical_author ca ON ca.title_id = t.title_id
-        JOIN authors a ON a.author_id = ca.author_id
-        WHERE pc.pub_id = %s AND t.title_ttype = 'COVERART'
-        """,
-        (pub["pub_id"],),
-    )
-    cover_artists = [r["author_canonical"] for r in cur.fetchall()]
+    def pub_cover_artists():
+        cur.execute(
+            """
+            SELECT a.author_canonical
+            FROM pub_content pc
+            JOIN titles t ON t.title_id = pc.title_id
+            JOIN canonical_author ca ON ca.title_id = t.title_id
+            JOIN authors a ON a.author_id = ca.author_id
+            WHERE pc.pub_id = %s AND t.title_ttype = 'COVERART'
+            """,
+            (pub["pub_id"],),
+        )
+        return [r["author_canonical"] for r in cur.fetchall()]
+    cover_artists = cached(cache, ("cover_artists", pub["pub_id"]), pub_cover_artists)
 
     language = None
     if title_row and title_row.get("title_language"):
-        cur.execute("SELECT lang_code FROM languages WHERE lang_id = %s", (title_row["title_language"],))
-        lrow = cur.fetchone()
-        language = lrow["lang_code"] if lrow else None
+        def lang():
+            cur.execute("SELECT lang_code FROM languages WHERE lang_id = %s", (title_row["title_language"],))
+            lrow = cur.fetchone()
+            return lrow["lang_code"] if lrow else None
+        language = cached(cache, ("language", title_row["title_language"]), lang)
 
     publisher = None
     if pub.get("publisher_id"):
-        cur.execute("SELECT publisher_name FROM publishers WHERE publisher_id = %s", (pub["publisher_id"],))
-        prow = cur.fetchone()
-        publisher = prow["publisher_name"] if prow else None
+        def publisher_name():
+            cur.execute("SELECT publisher_name FROM publishers WHERE publisher_id = %s", (pub["publisher_id"],))
+            prow = cur.fetchone()
+            return prow["publisher_name"] if prow else None
+        publisher = cached(cache, ("publisher", pub["publisher_id"]), publisher_name)
 
     # The publisher's branded line this printing belongs to — ISFDB's
     # *publication series* (The Women's Press Science Fiction, SF
     # Masterworks), distinct from the title's story series above and from
     # the publisher itself — with the printing's number in the line.
-    pub_series = pub_series_name(cur, pub.get("pub_series_id")) if pub.get("pub_series_id") else None
+    pub_series = (cached(cache, ("pub_series", pub["pub_series_id"]), lambda: pub_series_name(cur, pub["pub_series_id"]))
+                  if pub.get("pub_series_id") else None)
 
     # The title's story series by name (The Snow Queen Cycle), beside its
     # id and number below — so a consumer can file the book in the series
     # without a further call.
     series_name = None
     if title_row and title_row.get("series_id"):
-        cur.execute("SELECT series_title FROM series WHERE series_id = %s", (title_row["series_id"],))
-        srow = cur.fetchone()
-        series_name = srow["series_title"] if srow else None
+        def series_title():
+            cur.execute("SELECT series_title FROM series WHERE series_id = %s", (title_row["series_id"],))
+            srow = cur.fetchone()
+            return srow["series_title"] if srow else None
+        series_name = cached(cache, ("series", title_row["series_id"]), series_title)
 
     isbn = clean_isbn(pub.get("pub_isbn") or "")
     isbn10 = isbn13 = None
@@ -348,7 +427,7 @@ def lookup_isbn(isbn: str, all: bool = False):
             pubs = cur.fetchall()
             if not pubs:
                 raise HTTPException(status_code=404, detail="isbn not found")
-            return [book_result_from_pub(cur, pub) for pub in pubs]
+            return book_results(cur, pubs)
 
         cur.execute(
             f"SELECT * FROM pubs WHERE pub_isbn IN ({placeholders}) "
@@ -420,7 +499,7 @@ def isbns_with_middle(digits: str, limit: int = 100):
     with db() as conn, conn.cursor() as cur:
         placeholders = ",".join(["%s"] * len(candidates))
         cur.execute(f"SELECT * FROM pubs WHERE pub_isbn IN ({placeholders}) LIMIT %s", (*candidates, limit))
-        return [book_result_from_pub(cur, pub) for pub in cur.fetchall()]
+        return book_results(cur, cur.fetchall())
 
 
 # English-group ISBN-10 publisher ranges (group digit, low, high, code
@@ -471,7 +550,7 @@ def isbns_for_addon(digits: str, limit: int = 100):
             rows += cur.fetchall()
             if len(rows) >= limit:
                 break
-        return [book_result_from_pub(cur, pub) for pub in rows[:limit]]
+        return book_results(cur, rows[:limit])
 
 
 @app.get("/isbn/{isbn}/editions")
@@ -525,7 +604,7 @@ def lookup_isbn_editions(isbn: str):
             title_ids,
         )
         pubs = cur.fetchall()
-        return [book_result_from_pub(cur, pub) for pub in pubs]
+        return book_results(cur, pubs)
 
 
 @app.get("/titles/{title_id}/editions")
@@ -551,7 +630,7 @@ def title_editions(title_id: int):
             """,
             title_ids,
         )
-        return [book_result_from_pub(cur, pub) for pub in cur.fetchall()]
+        return book_results(cur, cur.fetchall())
 
 
 @app.get("/search")
@@ -603,15 +682,15 @@ def search_books(q: str, limit: int = 20, editions_per_title: int = 10):
                  WHERE t.title_ttype IN %s AND MATCH(a.author_canonical) AGAINST(%s IN NATURAL LANGUAGE MODE))
             ) matches
             GROUP BY title_id
-            ORDER BY total_score DESC
+            ORDER BY total_score DESC, title_id
             LIMIT %s
             """,
             (term, BOOK_TTYPES, term, term, BOOK_TTYPES, term, limit),
         )
         title_ids = [r["title_id"] for r in cur.fetchall()]
-        results = []
+        pubs: list[dict] = []
         for tid in title_ids:
-            if len(results) >= limit:
+            if len(pubs) >= limit:
                 break
             cur.execute(
                 """
@@ -622,11 +701,10 @@ def search_books(q: str, limit: int = 20, editions_per_title: int = 10):
                          p.pub_year ASC
                 LIMIT %s
                 """,
-                (tid, min(editions_per_title, limit - len(results))),
+                (tid, min(editions_per_title, limit - len(pubs))),
             )
-            for pub in cur.fetchall():
-                results.append(book_result_from_pub(cur, pub))
-        return results
+            pubs.extend(cur.fetchall())
+        return book_results(cur, pubs)
 
 
 @app.get("/series/search")
@@ -935,7 +1013,7 @@ def publication_series(pub_series_id: int):
         return {
             "id": series["pub_series_id"],
             "name": series["pub_series_name"],
-            "publications": [book_result_from_pub(cur, pub) for pub in cur.fetchall()],
+            "publications": book_results(cur, cur.fetchall()),
         }
 
 
