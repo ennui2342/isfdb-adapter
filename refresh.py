@@ -267,7 +267,14 @@ def build_search_indexes(database: str):
     dump — a plain LIKE '%...%' scan over ~2.5M rows in `titles` took 200+
     seconds (discovered in production); MATCH...AGAINST needs these to stay
     under a second. Rebuilt every refresh since each one is a fresh staging
-    database with none of the previous week's indexes."""
+    database with none of the previous week's indexes.
+
+    The tables are MyISAM, whose FULLTEXT indexes skip words under
+    ft_min_word_len (default 4) and a built-in list of ~550 common words —
+    "Vor", "War", "Eye", "Second" were unsearchable as title words. The
+    server runs with --ft_min_word_len=2 and an empty --ft_stopword_file=
+    (k8s isfdb/mariadb-statefulset.yaml); an index built under other
+    settings needs rebuilding (REPAIR TABLE … QUICK) to match them."""
     log.info("building search indexes on %s...", database)
     conn = db_conn(database)
     with conn.cursor() as cur:
