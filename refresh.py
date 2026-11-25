@@ -41,14 +41,15 @@ DB_USER = os.environ.get("DB_USER", "root")
 DB_PASSWORD = os.environ["MARIADB_ROOT_PASSWORD"]
 
 # Optional — same "visibility layer, never load-bearing" stance as
-# opsimath's own Notifications::DiscordNotifier (same bot REST API,
-# same channel). Mark, 2026-08-19: this run has zero visibility anywhere
-# (plain stdout logging only) and he suspects it causes a brief load/
-# latency blip while importing/rebuilding indexes — wants to correlate
-# against that, which needs to know *when* a run starts and how long it
-# actually took, not just success/failure after the fact.
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-DISCORD_CHANNEL_ID = os.environ.get("DISCORD_CHANNEL_ID")
+# opsimath's own Notifications::DiscordNotifier. Mark, 2026-08-19: this
+# run has zero visibility anywhere (plain stdout logging only) and he
+# suspects it causes a brief load/latency blip while importing/rebuilding
+# indexes — wants to correlate against that, which needs to know *when* a
+# run starts and how long it actually took, not just success/failure
+# after the fact. Posts to an incoming webhook (the homelab channel, with
+# the cluster's other ops messages), not a bot: it only ever posts, and a
+# webhook URL can do nothing but post to its one channel (2026-11-25).
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 DISCORD_COLOR_BY_LEVEL = {"info": 0x5865F2, "warn": 0xFAA61A, "error": 0xED4245}
 
 # ISFDB's shared "Backups" folder — public, "Anyone with the link" viewer,
@@ -83,28 +84,29 @@ WANTED_TABLES = frozenset({
 
 
 def notify_discord(title: str, fields: dict, level: str = "info") -> None:
-    """POST /channels/{id}/messages via the Discord bot REST API — the
-    exact same mechanism and channel opsimath's own DiscordNotifier
-    posts to, so these show up alongside opsimath's own notifications
-    for easy correlation. Does nothing if not configured. A notification
-    failure must never fail the refresh itself — logged and swallowed,
-    same as opsimath's own Notifications.notify does on its side.
+    """POST an embed to the DISCORD_WEBHOOK incoming webhook. Does nothing
+    if not configured. A notification failure must never fail the refresh
+    itself — logged and swallowed, same as opsimath's own
+    Notifications.notify does on its side.
     """
-    if not DISCORD_BOT_TOKEN or not DISCORD_CHANNEL_ID:
+    if not DISCORD_WEBHOOK:
         return
     try:
-        requests.post(
-            f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages",
-            headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
-            json={"embeds": [{
+        resp = requests.post(
+            DISCORD_WEBHOOK,
+            json={"username": "isfdb-refresh", "embeds": [{
                 "title": title,
                 "color": DISCORD_COLOR_BY_LEVEL.get(level, DISCORD_COLOR_BY_LEVEL["info"]),
                 "fields": [{"name": k, "value": str(v) or "—", "inline": True} for k, v in fields.items()],
             }]},
             timeout=10,
         )
+        if not resp.ok:
+            # Not raise_for_status(): its message carries the URL, and the
+            # webhook URL is the credential — keep it out of the logs.
+            log.warning("discord notification failed: HTTP %s", resp.status_code)
     except Exception as e:
-        log.warning("discord notification failed: %s", e)
+        log.warning("discord notification failed: %s", type(e).__name__)
 
 
 # Matches this folder's naming convention, e.g. backup-MySQL-55-2026-08-22.zip
