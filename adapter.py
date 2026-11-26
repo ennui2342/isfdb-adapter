@@ -633,6 +633,21 @@ def title_editions(title_id: int):
         return book_results(cur, cur.fetchall())
 
 
+# Words left out of a search's MATCH term when it has others. The server
+# indexes every word of 2+ letters, with no stopword list, so that short
+# title words count (Vor, It, War — mariadb args, 2026-11-22); but "the"
+# then matched 133,000 titles (6s for "The second trip") and authors
+# credited as "The Author of …", whose author score put two 1880s
+# anonymous books above The Second Trip.
+FILLER_WORDS = {"the", "a", "an", "of", "and", "or", "to", "in", "on", "at", "by", "for", "from", "with", "&"}
+
+
+def match_term(q: str) -> str:
+    words = q.split()
+    kept = [w for w in words if w.lower().strip(".,:;!?'\"()") not in FILLER_WORDS]
+    return " ".join(kept) if kept else q
+
+
 @app.get("/search")
 def search_books(q: str, limit: int = 20, editions_per_title: int = 10):
     """Title/author freetext search.
@@ -665,7 +680,7 @@ def search_books(q: str, limit: int = 20, editions_per_title: int = 10):
     """
     if len(q.strip()) < 2:
         raise HTTPException(status_code=400, detail="query too short")
-    term = q.strip()
+    term = match_term(q.strip())
     with db() as conn, conn.cursor() as cur:
         cur.execute(
             """
